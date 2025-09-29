@@ -11,3 +11,1697 @@ index 27443d094..2b5b0a3f2 100644
  # VictoriaMetrics
  
  [![Latest Release](https://img.shields.io/github/v/release/VictoriaMetrics/VictoriaMetrics?sort=semver&label=&filter=!*-victorialogs&logo=github&labelColor=gray&color=gray&link=https%3A%2F%2Fgithub.com%2FVictoriaMetrics%2FVictoriaMetrics%2Freleases%2Flatest)](https://github.com/VictoriaMetrics/VictoriaMetrics/releases)
+diff --git a/app/vmagent/main.go b/app/vmagent/main.go
+index f7efe0ef7..5a314e07a 100644
+--- a/app/vmagent/main.go
++++ b/app/vmagent/main.go
+@@ -117,6 +117,7 @@ func main() {
+ 	timeserieslimits.Init(*maxLabelsPerTimeseries, *maxLabelNameLen, *maxLabelValueLen)
+ 
+ 	if promscrape.IsDryRun() {
++		// 检查配置 -promscrape.config，关于 scrape_interval 和 targets 的配置
+ 		if err := promscrape.CheckConfig(); err != nil {
+ 			logger.Fatalf("error when checking -promscrape.config: %s", err)
+ 		}
+@@ -144,7 +145,9 @@ func main() {
+ 	logger.Infof("starting vmagent at %q...", listenAddrs)
+ 	startTime := time.Now()
+ 	remotewrite.StartIngestionRateLimiter()
++	// 初始化写入的远端 ???
+ 	remotewrite.Init()
++	// n 个核就初始化 n 个协程
+ 	protoparserutil.StartUnmarshalWorkers()
+ 	if len(*influxListenAddr) > 0 {
+ 		influxServer = influxserver.MustStart(*influxListenAddr, *influxUseProxyProtocol, func(r io.Reader) error {
+@@ -162,7 +165,8 @@ func main() {
+ 		httpInsertHandler := getOpenTSDBHTTPInsertHandler()
+ 		opentsdbhttpServer = opentsdbhttpserver.MustStart(*opentsdbHTTPListenAddr, *opentsdbHTTPUseProxyProtocol, httpInsertHandler)
+ 	}
+-
++	// Init 中做了配置文件解析等事情
++	// 猜测是 dail 一下，确保 remoteWrite 的后端都是可用的
+ 	promscrape.Init(remotewrite.PushDropSamplesOnFailure)
+ 
+ 	go httpserver.Serve(listenAddrs, requestHandler, httpserver.ServeOptions{
+@@ -171,6 +175,7 @@ func main() {
+ 	logger.Infof("started vmagent in %.3f seconds", time.Since(startTime).Seconds())
+ 
+ 	pushmetrics.Init()
++	// 等待退出信号
+ 	sig := procutil.WaitForSigterm()
+ 	logger.Infof("received signal %s", sig)
+ 	remotewrite.StopIngestionRateLimiter()
+diff --git a/app/vmagent/remotewrite/remotewrite.go b/app/vmagent/remotewrite/remotewrite.go
+index a3ac58675..c63856ef7 100644
+--- a/app/vmagent/remotewrite/remotewrite.go
++++ b/app/vmagent/remotewrite/remotewrite.go
+@@ -95,8 +95,10 @@ var (
+ 
+ var (
+ 	// rwctxsGlobal contains statically populated entries when -remoteWrite.url is specified.
++	// remoteWrite 的上下文
+ 	rwctxsGlobal              []*remoteWriteCtx
+ 	rwctxsGlobalIdx           []int
++	// 这个是 remoteWrite 的一致性 hash
+ 	rwctxConsistentHashGlobal *consistenthash.ConsistentHash
+ 
+ 	// ErrQueueFullHTTPRetry must be returned when TryPush() returns false.
+@@ -197,9 +199,9 @@ func Init() {
+ 	sighupCh := procutil.NewSighupChan()
+ 
+ 	initRelabelConfigs()
+-
++	// 用于聚合的配置
+ 	initStreamAggrConfigGlobal()
+-
++	// remoteWriteURLs 是 vminsert 的地址
+ 	initRemoteWriteCtxs(*remoteWriteURLs)
+ 
+ 	disableOnDiskQueues := []bool(*disableOnDiskQueue)
+@@ -221,6 +223,7 @@ func Init() {
+ 			select {
+ 			case <-configReloaderStopCh:
+ 				return
++			// 会在这里阻塞			
+ 			case <-sighupCh:
+ 			}
+ 			reloadRelabelConfigs()
+@@ -282,6 +285,7 @@ func initRemoteWriteCtxs(urls []string) {
+ 	if retryMaxTime.String() != "" {
+ 		logger.Warnf("-remoteWrite.retryMaxTime is deprecated; use -remoteWrite.retryMaxInterval instead")
+ 	}
++	// !! 注意：这里并未区分一个域名下对应着多个 ip:port 的事实. 为什么???
+ 	for i, remoteWriteURLRaw := range urls {
+ 		remoteWriteURL, err := url.Parse(remoteWriteURLRaw)
+ 		if err != nil {
+@@ -291,15 +295,17 @@ func initRemoteWriteCtxs(urls []string) {
+ 		if *showRemoteWriteURL {
+ 			sanitizedURL = fmt.Sprintf("%d:%s", i+1, remoteWriteURL)
+ 		}
++		// 每个远端建立一个 context
+ 		rwctxs[i] = newRemoteWriteCtx(i, remoteWriteURL, maxInmemoryBlocks, sanitizedURL)
+ 		rwctxIdx[i] = i
+ 	}
+-
++	// ??? 分片是什么意思
+ 	if *shardByURL {
+ 		consistentHashNodes := make([]string, 0, len(urls))
+ 		for i, url := range urls {
+ 			consistentHashNodes = append(consistentHashNodes, fmt.Sprintf("%d:%s", i+1, url))
+ 		}
++		// 一致性 hash
+ 		rwctxConsistentHashGlobal = consistenthash.NewConsistentHash(consistentHashNodes, 0)
+ 	}
+ 
+@@ -353,7 +359,7 @@ func Stop() {
+ 		deduplicatorGlobal.MustStop()
+ 		deduplicatorGlobal = nil
+ 	}
+-
++	// 退出
+ 	for _, rwctx := range rwctxsGlobal {
+ 		rwctx.MustStop()
+ 	}
+@@ -388,11 +394,13 @@ func TryPush(at *auth.Token, wr *prompb.WriteRequest) bool {
+ 
+ func tryPush(at *auth.Token, wr *prompb.WriteRequest, forceDropSamplesOnFailure bool) bool {
+ 	tss := wr.Timeseries
++	// 如果有 metadata 的话，会提前 push
+ 	mms := wr.Metadata
+ 
+ 	// Quick check whether writes to configured remote storage systems are blocked.
+ 	// This allows saving CPU time spent on relabeling and block compression
+ 	// if some of remote storage systems cannot keep up with the data ingestion rate.
++	// 选择没有阻塞的远端的列表
+ 	rwctxs, ok := getEligibleRemoteWriteCtxs(tss, forceDropSamplesOnFailure)
+ 	if !ok {
+ 		// At least a single remote write queue is blocked and dropSamplesOnFailure isn't set.
+@@ -407,10 +415,11 @@ func tryPush(at *auth.Token, wr *prompb.WriteRequest, forceDropSamplesOnFailure
+ 
+ 	// Push metadata separately from time series, since it doesn't need sharding,
+ 	// relabeling, stream aggregation, deduplication, etc.
++	// ??? push metadata 是什么意思
+ 	if !tryPushMetadataToRemoteStorages(rwctxs, mms, forceDropSamplesOnFailure) {
+ 		return false
+ 	}
+-
++	// 这个判断为什么不提前 => 因为要先 push metadata
+ 	if len(tss) == 0 {
+ 		return true
+ 	}
+@@ -436,7 +445,7 @@ func tryPush(at *auth.Token, wr *prompb.WriteRequest, forceDropSamplesOnFailure
+ 	maxLabelsPerBlock := 10 * maxSamplesPerBlock
+ 
+ 	sas := sasGlobal.Load()
+-
++	// 看起来是 relabel 的逻辑
+ 	for len(tss) > 0 {
+ 		// Process big tss in smaller blocks in order to reduce the maximum memory usage
+ 		samplesCount := 0
+@@ -480,6 +489,7 @@ func tryPush(at *auth.Token, wr *prompb.WriteRequest, forceDropSamplesOnFailure
+ 		}
+ 		sortLabelsIfNeeded(tssBlock)
+ 		tssBlock = limitSeriesCardinality(tssBlock)
++		// 是否要聚合
+ 		if sas.IsEnabled() {
+ 			matchIdxs := matchIdxsPool.Get()
+ 			matchIdxs.B = sas.Push(tssBlock, matchIdxs.B)
+@@ -492,6 +502,7 @@ func tryPush(at *auth.Token, wr *prompb.WriteRequest, forceDropSamplesOnFailure
+ 			deduplicatorGlobal.Push(tssBlock)
+ 			tssBlock = tssBlock[:0]
+ 		}
++		// 重要! push 具体 time series 数据的逻辑
+ 		if !tryPushTimeSeriesToRemoteStorages(rwctxs, tssBlock, forceDropSamplesOnFailure) {
+ 			return false
+ 		}
+@@ -505,6 +516,7 @@ func tryPush(at *auth.Token, wr *prompb.WriteRequest, forceDropSamplesOnFailure
+ // calculateHealthyRwctxIdx will rely on the order of rwctx to be in ascending order.
+ func getEligibleRemoteWriteCtxs(tss []prompb.TimeSeries, forceDropSamplesOnFailure bool) ([]*remoteWriteCtx, bool) {
+ 	if !disableOnDiskQueueAny {
++		 //  如果使用了文件队列，则直接返回所有远端
+ 		return rwctxsGlobal, true
+ 	}
+ 
+@@ -512,6 +524,7 @@ func getEligibleRemoteWriteCtxs(tss []prompb.TimeSeries, forceDropSamplesOnFailu
+ 	rwctxs := make([]*remoteWriteCtx, 0, len(rwctxsGlobal))
+ 	for _, rwctx := range rwctxsGlobal {
+ 		if !rwctx.fq.IsWriteBlocked() {
++			// 没有写阻塞，就选择这个远端
+ 			rwctxs = append(rwctxs, rwctx)
+ 		} else {
+ 			rwctx.pushFailures.Inc()
+@@ -556,6 +569,7 @@ func tryPushMetadataToRemoteStorages(rwctxs []*remoteWriteCtx, mms []prompb.Metr
+ 	var wg sync.WaitGroup
+ 	wg.Add(len(rwctxs))
+ 	var anyPushFailed atomic.Bool
++	// 每个远端用一个协程来发送
+ 	for _, rwctx := range rwctxs {
+ 		go func(rwctx *remoteWriteCtx) {
+ 			defer wg.Done()
+@@ -578,7 +592,7 @@ func tryPushTimeSeriesToRemoteStorages(rwctxs []*remoteWriteCtx, tssBlock []prom
+ 		// Nothing to push
+ 		return true
+ 	}
+-
++	// rwctxs 是所有可用的 remoteWriteCtx, 代表 -remoteWrite.url
+ 	if len(rwctxs) == 1 {
+ 		// Fast path - just push data to the configured single remote storage
+ 		return rwctxs[0].TryPushTimeSeries(tssBlock, forceDropSamplesOnFailure)
+@@ -601,6 +615,7 @@ func tryPushTimeSeriesToRemoteStorages(rwctxs []*remoteWriteCtx, tssBlock []prom
+ 	var wg sync.WaitGroup
+ 	wg.Add(len(rwctxs))
+ 	var anyPushFailed atomic.Bool
++	// 当存在多个 remoteWrite 的时候，每个远端用一个协程来发送.由此证明数据是复制的模式。
+ 	for _, rwctx := range rwctxs {
+ 		go func(rwctx *remoteWriteCtx) {
+ 			defer wg.Done()
+@@ -822,15 +837,20 @@ var (
+ 	rowsDroppedByGlobalRelabel    = metrics.NewCounter("vmagent_remotewrite_global_relabel_metrics_dropped_total")
+ )
+ 
++// 代表写入端的上下文对象
+ type remoteWriteCtx struct {
++	// ??? 这个是干嘛用的
+ 	idx int
++	// 猜测是数据缓冲队列
+ 	fq  *persistentqueue.FastQueue
++	// 远端的 client, 一般是 vminsert
+ 	c   *client
+-
++	// 看起来，每一个远端，对应着一个聚合器
+ 	sas          atomic.Pointer[streamaggr.Aggregators]
+ 	deduplicator *streamaggr.Deduplicator
+ 
+ 	streamAggrKeepInput bool
++	// 这个是哪里配置的?
+ 	streamAggrDropInput bool
+ 
+ 	pss        []*pendingSeries
+@@ -844,6 +864,7 @@ type remoteWriteCtx struct {
+ 	rowsDroppedOnPushFailure     *metrics.Counter
+ }
+ 
++// @param sanitizedURL string 用于打日志
+ func newRemoteWriteCtx(argIdx int, remoteWriteURL *url.URL, maxInmemoryBlocks int, sanitizedURL string) *remoteWriteCtx {
+ 	// strip query params, otherwise changing params resets pq
+ 	pqURL := *remoteWriteURL
+@@ -859,6 +880,7 @@ func newRemoteWriteCtx(argIdx int, remoteWriteURL *url.URL, maxInmemoryBlocks in
+ 	}
+ 
+ 	isPQDisabled := disableOnDiskQueue.GetOptionalArg(argIdx)
++	// 创建一个数据缓冲队列
+ 	fq := persistentqueue.MustOpenFastQueue(queuePath, sanitizedURL, maxInmemoryBlocks, maxPendingBytes, isPQDisabled)
+ 	_ = metrics.GetOrCreateGauge(fmt.Sprintf(`vmagent_remotewrite_pending_data_bytes{path=%q, url=%q}`, queuePath, sanitizedURL), func() float64 {
+ 		return float64(fq.GetPendingBytes())
+@@ -883,7 +905,9 @@ func newRemoteWriteCtx(argIdx int, remoteWriteURL *url.URL, maxInmemoryBlocks in
+ 	c.init(argIdx, *queues, sanitizedURL)
+ 
+ 	// Initialize pss
++	// 关于小数精度的配置
+ 	sf := significantFigures.GetOptionalArg(argIdx)
++	// 去整精度的配置
+ 	rd := roundDigits.GetOptionalArg(argIdx)
+ 	pssLen := *queues
+ 	if n := cgroup.AvailableCPUs(); pssLen > n {
+@@ -897,9 +921,13 @@ func newRemoteWriteCtx(argIdx int, remoteWriteURL *url.URL, maxInmemoryBlocks in
+ 	}
+ 
+ 	rwctx := &remoteWriteCtx{
++		// 属于所配置的第 n 个 url
+ 		idx: argIdx,
++		// 数据缓冲队列
+ 		fq:  fq,
++		// 远端的 client
+ 		c:   c,
++		// 猜测是 flush 前的数据分片，有 n 个核就分为 n 份
+ 		pss: pss,
+ 
+ 		rowsPushedAfterRelabel: metrics.GetOrCreateCounter(fmt.Sprintf(`vmagent_remotewrite_rows_pushed_after_relabel_total{path=%q,url=%q}`, queuePath, sanitizedURL)),
+@@ -951,6 +979,7 @@ func (rwctx *remoteWriteCtx) TryPushTimeSeries(tss []prompb.TimeSeries, forceDro
+ 		if rctx == nil {
+ 			return
+ 		}
++		// tss 对象可能来自内存池，把它放回内存池
+ 		*v = prompb.ResetTimeSeries(tss)
+ 		tssPool.Put(v)
+ 		putRelabelCtx(rctx)
+@@ -968,6 +997,7 @@ func (rwctx *remoteWriteCtx) TryPushTimeSeries(tss []prompb.TimeSeries, forceDro
+ 		v = tssPool.Get().(*[]prompb.TimeSeries)
+ 		tss = append(*v, tss...)
+ 		rowsCountBeforeRelabel := getRowsCount(tss)
++		// 做 relabel 的计算
+ 		tss = rctx.applyRelabeling(tss, pcs)
+ 		rowsCountAfterRelabel := getRowsCount(tss)
+ 		rwctx.rowsDroppedByRelabel.Add(rowsCountBeforeRelabel - rowsCountAfterRelabel)
+@@ -977,9 +1007,13 @@ func (rwctx *remoteWriteCtx) TryPushTimeSeries(tss []prompb.TimeSeries, forceDro
+ 
+ 	// Apply stream aggregation or deduplication if they are configured
+ 	sas := rwctx.sas.Load()
++	// 聚合器的逻辑
+ 	if sas.IsEnabled() {
++		// ??? 为什么没有调用 reset 方法?
+ 		matchIdxs := matchIdxsPool.Get()
++		// 数据聚合的逻辑
+ 		matchIdxs.B = sas.Push(tss, matchIdxs.B)
++		// 这里有个丢弃选项. 不设置 streamAggrKeepInput, 下面就是丢弃的逻辑
+ 		if !rwctx.streamAggrKeepInput {
+ 			if rctx == nil {
+ 				rctx = getRelabelCtx()
+@@ -987,6 +1021,7 @@ func (rwctx *remoteWriteCtx) TryPushTimeSeries(tss []prompb.TimeSeries, forceDro
+ 				v = tssPool.Get().(*[]prompb.TimeSeries)
+ 				tss = append(*v, tss...)
+ 			}
++			// 这里的逻辑可能影响往后端发送的频率
+ 			tss = dropAggregatedSeries(tss, matchIdxs.B, rwctx.streamAggrDropInput)
+ 		}
+ 		matchIdxsPool.Put(matchIdxs)
+@@ -997,6 +1032,7 @@ func (rwctx *remoteWriteCtx) TryPushTimeSeries(tss []prompb.TimeSeries, forceDro
+ 	}
+ 
+ 	// Try pushing tss to remote storage
++	// 聚合完成后，尝试 push
+ 	if rwctx.tryPushTimeSeriesInternal(tss) {
+ 		return true
+ 	}
+@@ -1015,8 +1051,11 @@ var matchIdxsPool bytesutil.ByteBufferPool
+ 
+ func dropAggregatedSeries(src []prompb.TimeSeries, matchIdxs []byte, dropInput bool) []prompb.TimeSeries {
+ 	dst := src[:0]
++	// 选项来自 remoteWriteCtx.streamAggrDropInput
+ 	if !dropInput {
++		// 这里是不丢弃的逻辑
+ 		for i, match := range matchIdxs {
++			// 这里的 1 可能是某种特殊分隔符
+ 			if match == 1 {
+ 				continue
+ 			}
+@@ -1024,11 +1063,15 @@ func dropAggregatedSeries(src []prompb.TimeSeries, matchIdxs []byte, dropInput b
+ 		}
+ 	}
+ 	tail := src[len(dst):]
++	// 尾部清空
+ 	clear(tail)
++	// 有返回空数组的可能
+ 	return dst
+ }
+ 
++// 回调函数
+ func (rwctx *remoteWriteCtx) pushInternalTrackDropped(tss []prompb.TimeSeries) {
++	// 猜测是：汇总后有自己的 flush 数据的逻辑
+ 	if rwctx.tryPushTimeSeriesInternal(tss) {
+ 		return
+ 	}
+@@ -1070,7 +1113,7 @@ func (rwctx *remoteWriteCtx) tryPushTimeSeriesInternal(tss []prompb.TimeSeries)
+ 
+ 	pss := rwctx.pss
+ 	idx := rwctx.pssNextIdx.Add(1) % uint64(len(pss))
+-
++	// send 到一个 buffer, buffer 写满后 flush
+ 	return pss[idx].TryPushTimeSeries(tss)
+ }
+ 
+diff --git a/app/vmagent/remotewrite/streamaggr.go b/app/vmagent/remotewrite/streamaggr.go
+index f820486c9..30d8ba7c6 100644
+--- a/app/vmagent/remotewrite/streamaggr.go
++++ b/app/vmagent/remotewrite/streamaggr.go
+@@ -145,6 +145,7 @@ func initStreamAggrConfigGlobal() {
+ 	}
+ }
+ 
++// 配置聚合方面的参数
+ func (rwctx *remoteWriteCtx) initStreamAggrConfig() {
+ 	idx := rwctx.idx
+ 
+@@ -228,7 +229,9 @@ func (rwctx *remoteWriteCtx) newStreamAggrConfig() (*streamaggr.Aggregators, err
+ }
+ 
+ func newStreamAggrConfigPerURL(idx int, pushFunc streamaggr.PushFunc) (*streamaggr.Aggregators, error) {
++	// 命令行参数 remoteWrite.streamAggr.config
+ 	path := streamAggrConfig.GetOptionalArg(idx)
++	// 一定要制定配置文件，才会使聚合生效
+ 	if path == "" {
+ 		return nil, nil
+ 	}
+@@ -238,18 +241,25 @@ func newStreamAggrConfigPerURL(idx int, pushFunc streamaggr.PushFunc) (*streamag
+ 		alias = fmt.Sprintf("%d:%s", idx+1, remoteWriteURLs.GetOptionalArg(idx))
+ 	}
+ 	var dropLabels []string
++	// remoteWrite.streamAggr.dropInputLabels
+ 	if streamAggrDropInputLabels.GetOptionalArg(idx) != "" {
+ 		dropLabels = strings.Split(streamAggrDropInputLabels.GetOptionalArg(idx), "^^")
+ 	}
+ 	opts := &streamaggr.Options{
++		// 命令行参数 remoteWrite.streamAggr.dedupInterval
+ 		DedupInterval:        streamAggrDedupInterval.GetOptionalArg(idx),
++		// 命令行参数 remoteWrite.streamAggr.dropInputLabels
+ 		DropInputLabels:      dropLabels,
++		// 命令行参数 remoteWrite.streamAggr.ignoreOldSamples
+ 		IgnoreOldSamples:     streamAggrIgnoreOldSamples.GetOptionalArg(idx),
++		// remoteWrite.streamAggr.ignoreFirstIntervals
+ 		IgnoreFirstIntervals: streamAggrIgnoreFirstIntervals.GetOptionalArg(idx),
++		// remoteWrite.streamAggr.keepInput, 默认应该是 false
+ 		KeepInput:            streamAggrKeepInput.GetOptionalArg(idx),
++		// remoteWrite.streamAggr.enableWindows
+ 		EnableWindows:        streamAggrEnableWindows.GetOptionalArg(idx),
+ 	}
+-
++	// 解析配置文件
+ 	sas, err := streamaggr.LoadFromFile(path, pushFunc, opts, alias)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("cannot load -remoteWrite.streamAggr.config=%q: %w", path, err)
+diff --git a/app/vmselect/clusternative/vmselect.go b/app/vmselect/clusternative/vmselect.go
+index 93c74ede1..0f8b5cfc7 100644
+--- a/app/vmselect/clusternative/vmselect.go
++++ b/app/vmselect/clusternative/vmselect.go
+@@ -30,6 +30,7 @@ var (
+ )
+ 
+ // NewVMSelectServer starts new server at the given addr, which serves vmselect requests from netstorage.
++// 启动级联的代理服务
+ func NewVMSelectServer(addr string) (*vmselectapi.Server, error) {
+ 	api := &vmstorageAPI{}
+ 	limits := vmselectapi.Limits{
+@@ -48,8 +49,10 @@ func NewVMSelectServer(addr string) (*vmselectapi.Server, error) {
+ type vmstorageAPI struct{}
+ 
+ func (api *vmstorageAPI) InitSearch(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) (vmselectapi.BlockIterator, error) {
++	// 级联的时候，具体的处理业务逻辑的方式
+ 	denyPartialResponse := httputil.GetDenyPartialResponse(nil)
+ 	dl := searchutil.DeadlineFromTimestamp(deadline)
++	// 级联的逻辑
+ 	bi := newBlockIterator(qt, denyPartialResponse, sq, dl)
+ 	return bi, nil
+ }
+@@ -138,12 +141,14 @@ func newBlockIterator(qt *querytracer.Tracer, denyPartialResponse bool, sq *stor
+ 	var bi blockIterator
+ 	bi.workCh = make(chan workItem, 16)
+ 	bi.wg.Add(1)
++	// 直接向另一个服务发起请求
+ 	go func() {
+ 		_, err := netstorage.ProcessBlocks(qt, denyPartialResponse, sq, func(mb *storage.MetricBlock, _ uint) error {
+ 			wi := workItem{
+ 				mb:     mb,
+ 				doneCh: make(chan struct{}),
+ 			}
++			// 没有计算逻辑，对结果只做透传
+ 			bi.workCh <- wi
+ 			<-wi.doneCh
+ 			return nil
+diff --git a/app/vmselect/main.go b/app/vmselect/main.go
+index 1bf0d8589..39a804e5b 100644
+--- a/app/vmselect/main.go
++++ b/app/vmselect/main.go
+@@ -96,10 +96,12 @@ func main() {
+ 
+ 	logger.Infof("starting netstorage at storageNodes %s", *storageNodes)
+ 	startTime := time.Now()
++	// dedup 逻辑
+ 	storage.SetDedupInterval(*minScrapeInterval)
+ 	if len(*storageNodes) == 0 {
+ 		logger.Fatalf("missing -storageNode arg")
+ 	}
++	// 用户指定的后端的存储节点
+ 	if hasEmptyValues(*storageNodes) {
+ 		logger.Fatalf("found empty address of storage node in the -storageNodes flag, please make sure that all -storageNode args are non-empty")
+ 	}
+@@ -124,6 +126,7 @@ func main() {
+ 	initVMUIConfig()
+ 	initVMAlertProxy()
+ 	var vmselectapiServer *vmselectapi.Server
++	// 用于级联的端口，把 select 看成是 storage
+ 	if *clusternativeListenAddr != "" {
+ 		logger.Infof("starting vmselectapi server at %q", *clusternativeListenAddr)
+ 		s, err := clusternative.NewVMSelectServer(*clusternativeListenAddr)
+diff --git a/app/vmselect/netstorage/netstorage.go b/app/vmselect/netstorage/netstorage.go
+index f25199bd6..73fb8f9a9 100644
+--- a/app/vmselect/netstorage/netstorage.go
++++ b/app/vmselect/netstorage/netstorage.go
+@@ -121,15 +121,20 @@ type timeseriesWork struct {
+ 	rowsProcessed int
+ }
+ 
++// 在与 n 个核匹配的新协程中执行
++// @param r *Result 输出参数
+ func (tsw *timeseriesWork) do(r *Result, workerID uint) error {
++	// 是否要停止
+ 	if tsw.mustStop.Load() {
+ 		return nil
+ 	}
+ 	rss := tsw.rss
++	// 是否执行到期了
+ 	if rss.deadline.Exceeded() {
+ 		tsw.mustStop.Store(true)
+ 		return fmt.Errorf("timeout exceeded during query execution: %s", rss.deadline.String())
+ 	}
++	// 做 dedup 等逻辑
+ 	if err := tsw.pts.Unpack(r, rss.tbfs, rss.tr); err != nil {
+ 		tsw.mustStop.Store(true)
+ 		return fmt.Errorf("error during time series unpacking: %w", err)
+@@ -144,13 +149,16 @@ func (tsw *timeseriesWork) do(r *Result, workerID uint) error {
+ 	return nil
+ }
+ 
++// 猜测是做计算的协程。n 个核就分配 n 个协程
+ func timeseriesWorker(qt *querytracer.Tracer, workChs []chan *timeseriesWork, workerID uint) {
++	// 存放处理结果的临时对象
+ 	tmpResult := getTmpResult()
+ 
+ 	// Perform own work at first.
+ 	rowsProcessed := 0
+ 	seriesProcessed := 0
+ 	ch := workChs[workerID]
++	// 从 channel 中进行消费
+ 	for tsw := range ch {
+ 		tsw.err = tsw.do(&tmpResult.rs, workerID)
+ 		rowsProcessed += tsw.rowsProcessed
+@@ -158,12 +166,14 @@ func timeseriesWorker(qt *querytracer.Tracer, workChs []chan *timeseriesWork, wo
+ 	}
+ 	qt.Printf("own work processed: series=%d, samples=%d", seriesProcessed, rowsProcessed)
+ 
++	// 这个代码很赞：做了工作窃取的逻辑
+ 	// Then help others with the remaining work.
+ 	rowsProcessed = 0
+ 	seriesProcessed = 0
+ 	for i := uint(1); i < uint(len(workChs)); i++ {
+ 		idx := (i + workerID) % uint(len(workChs))
+ 		ch := workChs[idx]
++		// 这个判断表示 channel 中还有计算任务
+ 		for len(ch) > 0 {
+ 			// Do not call runtime.Gosched() here in order to give a chance
+ 			// the real owner of the work to complete it, since it consumes additional CPU
+@@ -172,6 +182,7 @@ func timeseriesWorker(qt *querytracer.Tracer, workChs []chan *timeseriesWork, wo
+ 
+ 			// It is expected that every channel in the workChs is already closed,
+ 			// so the next line should return immediately.
++			// 从队列中消费
+ 			tsw, ok := <-ch
+ 			if !ok {
+ 				break
+@@ -215,6 +226,7 @@ var resultPool sync.Pool
+ func MaxWorkers() int {
+ 	n := *maxWorkersPerQuery
+ 	if n <= 0 {
++		// 每个查询允许的最大并发数
+ 		return defaultMaxWorkersPerQuery
+ 	}
+ 	if n > gomaxprocs {
+@@ -225,13 +237,14 @@ func MaxWorkers() int {
+ 	return n
+ }
+ 
++// 可用的核数
+ var gomaxprocs = cgroup.AvailableCPUs()
+ 
+ var defaultMaxWorkersPerQuery = func() int {
+ 	// maxWorkersLimit is the maximum number of CPU cores, which can be used in parallel
+ 	// for processing an average query, without significant impact on inter-CPU communications.
+ 	const maxWorkersLimit = 32
+-
++	// 最大并发数为 32 个，但是核数小于 32 的话，等于核数
+ 	n := min(gomaxprocs, maxWorkersLimit)
+ 	return n
+ }()
+@@ -282,7 +295,7 @@ func (rss *Results) runParallel(qt *querytracer.Tracer, f func(rs *Result, worke
+ 		tsw.f = cb
+ 		tsw.mustStop = &mustStop
+ 	}
+-
++	// 并发数与核数相关
+ 	maxWorkers := MaxWorkers()
+ 	if maxWorkers == 1 || tswsLen == 1 {
+ 		// It is faster to process time series in the current goroutine.
+@@ -317,6 +330,7 @@ func (rss *Results) runParallel(qt *querytracer.Tracer, f func(rs *Result, worke
+ 	// Prepare worker channels.
+ 	workers := min(len(tsws), maxWorkers)
+ 	itemsPerWorker := (len(tsws) + workers - 1) / workers
++	// n 个核就分配 n 个 channel
+ 	workChs := make([]chan *timeseriesWork, workers)
+ 	for i := range workChs {
+ 		workChs[i] = make(chan *timeseriesWork, itemsPerWorker)
+@@ -325,6 +339,7 @@ func (rss *Results) runParallel(qt *querytracer.Tracer, f func(rs *Result, worke
+ 	// Spread work among workers.
+ 	for i := range tsws {
+ 		idx := i % len(workChs)
++		 // 把任务丢到 channel  // 数组的每一项是一个 time series
+ 		workChs[idx] <- &tsws[i]
+ 	}
+ 	// Mark worker channels as closed.
+@@ -337,6 +352,7 @@ func (rss *Results) runParallel(qt *querytracer.Tracer, f func(rs *Result, worke
+ 	for i := range workChs {
+ 		wg.Add(1)
+ 		qtChild := qt.NewChild("worker #%d", i)
++		 // n 个核就创建 n 个协程来做计算
+ 		go func(workerID uint) {
+ 			timeseriesWorker(qtChild, workChs, workerID)
+ 			qtChild.Done()
+@@ -368,6 +384,7 @@ var (
+ 
+ type packedTimeseries struct {
+ 	metricName string
++	// 猜测是指向一个大数据块的索引信息
+ 	addrs      []tmpBlockAddr
+ }
+ 
+@@ -387,8 +404,10 @@ func (upw *unpackWork) reset() {
+ 	upw.err = nil
+ }
+ 
++// @param tmpBlock *storage.Block, out 参数
+ func (upw *unpackWork) unpack(tmpBlock *storage.Block) {
+ 	sb := getSortBlock()
++	// 展开后，变成了 timestamps 和 values 的数组
+ 	if err := sb.unpackFrom(tmpBlock, upw.tbfs, upw.addr, upw.tr); err != nil {
+ 		putSortBlock(sb)
+ 		upw.err = fmt.Errorf("cannot unpack block: %w", err)
+@@ -459,26 +478,33 @@ func putTmpStorageBlock(sb *storage.Block) {
+ var tmpStorageBlockPool sync.Pool
+ 
+ // Unpack unpacks pts to dst.
++// Result 对应的 metric 一定是同一个 metric 吗?
+ func (pts *packedTimeseries) Unpack(dst *Result, tbfs []*tmpBlocksFile, tr storage.TimeRange) error {
+ 	dst.reset()
++	// metric 名字拷贝到 out 对象上
+ 	if err := dst.MetricName.Unmarshal(bytesutil.ToUnsafeBytes(pts.metricName)); err != nil {
+ 		return fmt.Errorf("cannot unmarshal metricName %q: %w", pts.metricName, err)
+ 	}
++	// 得到一个堆对象
+ 	sbh := getSortBlocksHeap()
+ 	var err error
++	// 返回了 block 的数组，数组里面都是解码好的 timestamps/ values
+ 	sbh.sbs, err = pts.unpackTo(sbh.sbs[:0], tbfs, tr)
+ 	pts.addrs = pts.addrs[:0]
+ 	if err != nil {
+ 		putSortBlocksHeap(sbh)
+ 		return err
+ 	}
++	// 查询时，拉取全局的 dedup 间隔配置
+ 	dedupInterval := storage.GetDedupInterval()
++	// 去重逻辑
+ 	mergeSortBlocks(dst, sbh, dedupInterval)
+ 	putSortBlocksHeap(sbh)
+ 	return nil
+ }
+ 
+ func (pts *packedTimeseries) unpackTo(dst []*sortBlock, tbfs []*tmpBlocksFile, tr storage.TimeRange) ([]*sortBlock, error) {
++	// // addrs 猜测是多个数据块的索引信息
+ 	upwsLen := len(pts.addrs)
+ 	if upwsLen == 0 {
+ 		// Nothing to do
+@@ -495,13 +521,17 @@ func (pts *packedTimeseries) unpackTo(dst []*sortBlock, tbfs []*tmpBlocksFile, t
+ 		samples := 0
+ 		tmpBlock := getTmpStorageBlock()
+ 		var err error
++		// // 遍历 addr， 也就是索引块
+ 		for _, addr := range pts.addrs {
++			// 填充字段
+ 			initUnpackWork(upw, addr)
++			// 变成了具体的值的数组， ts, value
+ 			upw.unpack(tmpBlock)
+ 			if upw.err != nil {
+ 				return dst, upw.err
+ 			}
+ 			samples += len(upw.sb.Timestamps)
++			// 点的数量超过了允许的最大值，则查询失败
+ 			if *maxSamplesPerSeries > 0 && samples > *maxSamplesPerSeries {
+ 				putSortBlock(upw.sb)
+ 				err = &limitExceededErr{
+@@ -518,7 +548,7 @@ func (pts *packedTimeseries) unpackTo(dst []*sortBlock, tbfs []*tmpBlocksFile, t
+ 
+ 		return dst, err
+ 	}
+-
++	// 开协程来计算，提高性能
+ 	// Slow path - spin up multiple local workers for parallel data unpacking.
+ 	// Do not use global workers pool, since it increases inter-CPU memory ping-pong,
+ 	// which reduces the scalability on systems with many CPU cores.
+@@ -607,10 +637,12 @@ var sbPool sync.Pool
+ 
+ var metricRowsSkipped = metrics.NewCounter(`vm_metric_rows_skipped_total{name="vmselect"}`)
+ 
++// 这里包含了 dedup 逻辑
+ func mergeSortBlocks(dst *Result, sbh *sortBlocksHeap, dedupInterval int64) {
+ 	// Skip empty sort blocks, since they cannot be passed to heap.Init.
+ 	sbs := sbh.sbs[:0]
+ 	for _, sb := range sbh.sbs {
++		// 丢掉无效的块
+ 		if len(sb.Timestamps) == 0 {
+ 			putSortBlock(sb)
+ 			continue
+@@ -621,7 +653,9 @@ func mergeSortBlocks(dst *Result, sbh *sortBlocksHeap, dedupInterval int64) {
+ 	if sbh.Len() == 0 {
+ 		return
+ 	}
++	// 构造堆
+ 	heap.Init(sbh)
++	// 遍历整个堆。遍历的过程，一定是按照 timestamp 的顺序来进行的
+ 	for {
+ 		sbs := sbh.sbs
+ 		top := sbs[0]
+@@ -636,6 +670,7 @@ func mergeSortBlocks(dst *Result, sbh *sortBlocksHeap, dedupInterval int64) {
+ 		topNextIdx := top.NextIdx
+ 		if n := equalSamplesPrefix(top, sbNext); n > 0 && dedupInterval > 0 {
+ 			// Skip n replicated samples at top if deduplication is enabled.
++			// 重复的部分直接丢弃
+ 			top.NextIdx = topNextIdx + n
+ 		} else {
+ 			// Copy samples from top to dst with timestamps not exceeding tsNext.
+@@ -650,6 +685,8 @@ func mergeSortBlocks(dst *Result, sbh *sortBlocksHeap, dedupInterval int64) {
+ 			putSortBlock(top)
+ 		}
+ 	}
++	// 上面把所有的 timestamps 和 values 追加到一个大数组中
++	// dedup 只与时间戳有关
+ 	timestamps, values := storage.DeduplicateSamples(dst.Timestamps, dst.Values, dedupInterval)
+ 	dedups := len(dst.Timestamps) - len(timestamps)
+ 	dedupsDuringSelect.Add(dedups)
+@@ -661,6 +698,7 @@ var dedupsDuringSelect = metrics.NewCounter(`vm_deduplicated_samples_total{type=
+ 
+ func equalSamplesPrefix(a, b *sortBlock) int {
+ 	n := equalTimestampsPrefix(a.Timestamps[a.NextIdx:], b.Timestamps[b.NextIdx:])
++	// 时间戳的个数必须一样，才会进行value是否相同的比较
+ 	if n == 0 {
+ 		return 0
+ 	}
+@@ -669,6 +707,8 @@ func equalSamplesPrefix(a, b *sortBlock) int {
+ 
+ func equalTimestampsPrefix(a, b []int64) int {
+ 	for i, v := range a {
++		// 数组不一样长，大概率是不等的
++		// 或者 出现了不相等的时间戳
+ 		if i >= len(b) || v != b[i] {
+ 			return i
+ 		}
+@@ -716,14 +756,19 @@ func (sb *sortBlock) reset() {
+ 	sb.NextIdx = 0
+ }
+ 
++// @param tmpBlock *storage.Block, out 参数
+ func (sb *sortBlock) unpackFrom(tmpBlock *storage.Block, tbfs []*tmpBlocksFile, addr tmpBlockAddr, tr storage.TimeRange) error {
+ 	tmpBlock.Reset()
++	// 在指定的数据块上，调用读方法
+ 	tbfs[addr.tbfIdx].MustReadBlockAt(tmpBlock, addr)
++	// 反序列化 timestamps 和 values
+ 	if err := tmpBlock.UnmarshalData(); err != nil {
+ 		return fmt.Errorf("cannot unmarshal block: %w", err)
+ 	}
++	// 根据起止时间进行过滤
+ 	sb.Timestamps, sb.Values = tmpBlock.AppendRowsWithTimeRangeFilter(sb.Timestamps[:0], sb.Values[:0], tr)
+ 	skippedRows := tmpBlock.RowsCount() - len(sb.Timestamps)
++	// 对浪费的部分进行上报
+ 	metricRowsSkipped.Add(skippedRows)
+ 	return nil
+ }
+@@ -756,6 +801,7 @@ func (sbh *sortBlocksHeap) Less(i, j int) bool {
+ 	sbs := sbh.sbs
+ 	a := sbs[i]
+ 	b := sbs[j]
++	// 根据时间戳的大小来建立堆
+ 	return a.Timestamps[a.NextIdx] < b.Timestamps[b.NextIdx]
+ }
+ 
+@@ -1534,6 +1580,7 @@ func (tbfw *tmpBlocksFileWrapper) RegisterAndWriteBlock(mb *storage.MetricBlock,
+ 	metricName := mb.MetricName
+ 	addrsIdx := tbfwLocal.prevAddrsIdx
+ 	if tbfwLocal.prevMetricName == nil || string(metricName) != string(tbfwLocal.prevMetricName) {
++		// 看起来是通过 metricsName 来合并数据的
+ 		idx, ok := m[string(metricName)]
+ 		if !ok {
+ 			idx = tbfwLocal.newBlockAddrs()
+diff --git a/app/vmselect/netstorage/tmp_blocks_file.go b/app/vmselect/netstorage/tmp_blocks_file.go
+index 0d8d4196b..20aeec6ab 100644
+--- a/app/vmselect/netstorage/tmp_blocks_file.go
++++ b/app/vmselect/netstorage/tmp_blocks_file.go
+@@ -55,6 +55,7 @@ var (
+ 	tmpBufSizeSummary = metrics.NewSummary(`vm_tmp_blocks_inmemory_file_size_bytes`)
+ )
+ 
++// 数据块对象
+ type tmpBlocksFile struct {
+ 	buf []byte
+ 
+@@ -170,6 +171,7 @@ func (tbf *tmpBlocksFile) Finalize() error {
+ func (tbf *tmpBlocksFile) MustReadBlockAt(dst *storage.Block, addr tmpBlockAddr) {
+ 	var buf []byte
+ 	if tbf.r == nil {
++		// 在一个大 buffer 上，截取其中一块数据
+ 		buf = tbf.buf[addr.offset : addr.offset+uint64(addr.size)]
+ 	} else {
+ 		bb := tmpBufPool.Get()
+diff --git a/app/vmselect/prometheus/prometheus.go b/app/vmselect/prometheus/prometheus.go
+index befb8a1cf..d61c05641 100644
+--- a/app/vmselect/prometheus/prometheus.go
++++ b/app/vmselect/prometheus/prometheus.go
+@@ -538,6 +538,7 @@ func DeleteHandler(startTime time.Time, at *auth.Token, r *http.Request) error {
+ 		// Reset rollup result cache on all the vmselect nodes,
+ 		// since the cache may contain deleted data.
+ 		// TODO: reset only cache for (account, project)
++		// 调用级联节点的 /internal/resetRollupResultCache
+ 		resetRollupResultCaches()
+ 	}
+ 	return nil
+@@ -545,6 +546,7 @@ func DeleteHandler(startTime time.Time, at *auth.Token, r *http.Request) error {
+ 
+ var deleteDuration = metrics.NewSummary(`vm_request_duration_seconds{path="/api/v1/admin/tsdb/delete_series"}`)
+ 
++// 调用其他节点的接口:/internal/resetRollupResultCache
+ func resetRollupResultCaches() {
+ 	resetRollupResultCacheCalls.Inc()
+ 	// Reset local cache before checking whether selectNodes list is empty.
+@@ -562,6 +564,7 @@ func resetRollupResultCaches() {
+ 			logger.Fatalf("cannot normalize -selectNode=%q: %s", selectNode, err)
+ 		}
+ 		selectNode = normalizedAddr
++		// 调用删除 cache 的接口
+ 		callURL := fmt.Sprintf("http://%s/internal/resetRollupResultCache", selectNode)
+ 		resp, err := httpClient.Get(callURL)
+ 		if err != nil {
+@@ -842,9 +845,11 @@ var seriesDuration = metrics.NewSummary(`vm_request_duration_seconds{path="/api/
+ //
+ // See https://prometheus.io/docs/prometheus/latest/querying/api/#instant-queries
+ func QueryHandler(qt *querytracer.Tracer, startTime time.Time, at *auth.Token, w http.ResponseWriter, r *http.Request) error {
++	// 计算函数耗时
+ 	defer queryDuration.UpdateDuration(startTime)
+ 
+ 	ct := startTime.UnixNano() / 1e6
++	// 超时的 deadline
+ 	deadline := searchutil.GetDeadlineForQuery(r, startTime)
+ 	noCache := httputil.GetBool(r, "nocache")
+ 	query := r.FormValue("query")
+@@ -1006,6 +1011,7 @@ var queryDuration = metrics.NewSummary(`vm_request_duration_seconds{path="/api/v
+ //
+ // See https://prometheus.io/docs/prometheus/latest/querying/api/#range-queries
+ func QueryRangeHandler(qt *querytracer.Tracer, startTime time.Time, at *auth.Token, w http.ResponseWriter, r *http.Request) error {
++	// 对函数处理时间做计时
+ 	defer queryRangeDuration.UpdateDuration(startTime)
+ 
+ 	ct := startTime.UnixNano() / 1e6
+@@ -1025,6 +1031,7 @@ func QueryRangeHandler(qt *querytracer.Tracer, startTime time.Time, at *auth.Tok
+ 	if err != nil {
+ 		return err
+ 	}
++	// 额外的过滤标签
+ 	etfs, err := searchutil.GetExtraTagFilters(r)
+ 	if err != nil {
+ 		return err
+@@ -1037,14 +1044,17 @@ func QueryRangeHandler(qt *querytracer.Tracer, startTime time.Time, at *auth.Tok
+ 
+ func queryRangeHandler(qt *querytracer.Tracer, startTime time.Time, at *auth.Token, w http.ResponseWriter, query string,
+ 	start, end, step int64, r *http.Request, ct int64, etfs [][]storage.TagFilter) error {
++	// 查询超时的 deadline
+ 	deadline := searchutil.GetDeadlineForQuery(r, startTime)
+ 	noCache := httputil.GetBool(r, "nocache")
++	// ???
+ 	lookbackDelta, err := getMaxLookback(r)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
+ 	// Validate input args.
++	// 查询表达式允许的最大长度
+ 	maxLen := searchutil.GetMaxQueryLen()
+ 	if len(query) > maxLen {
+ 		return fmt.Errorf("too long query; got %d bytes; mustn't exceed `-search.maxQueryLen=%d` bytes", len(query), maxLen)
+@@ -1052,6 +1062,7 @@ func queryRangeHandler(qt *querytracer.Tracer, startTime time.Time, at *auth.Tok
+ 	if start > end {
+ 		end = start + defaultStep
+ 	}
++	// 计算 data pointer 是否已经超过了最大限制
+ 	if err := promql.ValidateMaxPointsPerSeries(start, end, step, *maxPointsPerTimeseries); err != nil {
+ 		return fmt.Errorf("%w; (see -search.maxPointsPerTimeseries command-line flag)", err)
+ 	}
+@@ -1083,6 +1094,7 @@ func queryRangeHandler(qt *querytracer.Tracer, startTime time.Time, at *auth.Tok
+ 		return fmt.Errorf("cannot populate auth tokens: %w", err)
+ 	}
+ 	qs := promql.NewQueryStats(query, at, ec)
++	// 查询统计对象，用于实现性能 trace
+ 	ec.QueryStats = qs
+ 
+ 	result, err := promql.Exec(qt, ec, query, false)
+diff --git a/app/vmselect/promql/eval.go b/app/vmselect/promql/eval.go
+index f2821fdef..5753b8220 100644
+--- a/app/vmselect/promql/eval.go
++++ b/app/vmselect/promql/eval.go
+@@ -393,6 +393,7 @@ func evalTransformFunc(qt *querytracer.Tracer, ec *EvalConfig, fe *metricsql.Fun
+ 
+ func evalAggrFunc(qt *querytracer.Tracer, ec *EvalConfig, ae *metricsql.AggrFuncExpr) ([]*timeseries, error) {
+ 	if callbacks := getIncrementalAggrFuncCallbacks(ae.Name); callbacks != nil {
++		// 找到类似 sum() 等聚合函数的 执行代码
+ 		fe, nrf := tryGetArgRollupFuncWithMetricExpr(ae)
+ 		if fe != nil {
+ 			// There is an optimized path for calculating metricsql.AggrFuncExpr over rollupFunc over metricsql.MetricExpr.
+diff --git a/lib/promscrape/config.go b/lib/promscrape/config.go
+index b9acbb79b..448459bb1 100644
+--- a/lib/promscrape/config.go
++++ b/lib/promscrape/config.go
+@@ -86,9 +86,11 @@ var (
+ 		"Bigger responses are rejected. See also max_scrape_size option at https://docs.victoriametrics.com/victoriametrics/sd_configs/#scrape_configs")
+ )
+ 
++// 记录 target 分片的编号
+ var clusterMemberID int
+ 
+ func mustInitClusterMemberID() {
++	// 为 targets 分片。分片的编号
+ 	s := *clusterMemberNum
+ 	// special case for kubernetes deployment, where pod-name formatted at some-pod-name-1
+ 	// obtain memberNum from last segment
+@@ -112,6 +114,7 @@ func mustInitClusterMemberID() {
+ 
+ // Config represents essential parts from Prometheus config defined at https://prometheus.io/docs/prometheus/latest/configuration/configuration/
+ type Config struct {
++	// 这些字段对应着 yaml 文件中的 global:
+ 	Global            GlobalConfig    `yaml:"global,omitempty"`
+ 	ScrapeConfigs     []*ScrapeConfig `yaml:"scrape_configs,omitempty"`
+ 	ScrapeConfigFiles []string        `yaml:"scrape_config_files,omitempty"`
+@@ -121,11 +124,12 @@ type Config struct {
+ }
+ 
+ func (cfg *Config) unmarshal(data []byte, isStrict bool) error {
++	// 读取所有的环境变量，然后把环境变量填充进去
+ 	data = envtemplate.ReplaceBytes(data)
+ 	if !isStrict {
+ 		return yaml.Unmarshal(data, cfg)
+ 	}
+-
++	// 填充结构体
+ 	if err := yaml.UnmarshalStrict(data, cfg); err != nil {
+ 		return fmt.Errorf("%w; pass -promscrape.config.strictParse=false command-line flag for ignoring unknown fields in yaml config", err)
+ 	}
+@@ -143,10 +147,14 @@ func (cfg *Config) marshal() []byte {
+ func (cfg *Config) mustStart() {
+ 	startTime := time.Now()
+ 	logger.Infof("starting service discovery routines...")
++	// 遍历每个 job
+ 	for _, sc := range cfg.ScrapeConfigs {
++		// 整理 Kubernetes service discovery configurations 的配置
+ 		sc.mustStart(cfg.baseDir)
+ 	}
++	// 所有的 job 名称
+ 	jobNames := cfg.getJobNames()
++	// ？？？ 根据 jobName 创建了一些对象
+ 	tsmGlobal.registerJobNames(jobNames)
+ 	logger.Infof("started %d service discovery routines in %.3f seconds", len(cfg.ScrapeConfigs), time.Since(startTime).Seconds())
+ }
+@@ -262,6 +270,7 @@ func (cfg *Config) getJobNames() []string {
+ // See https://prometheus.io/docs/prometheus/latest/configuration/configuration/
+ type GlobalConfig struct {
+ 	LabelLimit           int                         `yaml:"label_limit,omitempty"`
++	// 抓取时间间隔
+ 	ScrapeInterval       *promutil.Duration          `yaml:"scrape_interval,omitempty"`
+ 	ScrapeTimeout        *promutil.Duration          `yaml:"scrape_timeout,omitempty"`
+ 	ExternalLabels       *promutil.Labels            `yaml:"external_labels,omitempty"`
+@@ -274,6 +283,7 @@ type GlobalConfig struct {
+ // See https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config
+ type ScrapeConfig struct {
+ 	JobName        string             `yaml:"job_name"`
++	// 某个 job 的抓取时间间隔
+ 	ScrapeInterval *promutil.Duration `yaml:"scrape_interval,omitempty"`
+ 	ScrapeTimeout  *promutil.Duration `yaml:"scrape_timeout,omitempty"`
+ 	MaxScrapeSize  string             `yaml:"max_scrape_size,omitempty"`
+@@ -341,6 +351,7 @@ type ScrapeConfig struct {
+ func (sc *ScrapeConfig) mustStart(baseDir string) {
+ 	swosFunc := func(metaLabels *promutil.Labels) any {
+ 		target := metaLabels.Get("__address__")
++		// sw 是具体的一个 exporter 的访问地址及其对象
+ 		sw, err := sc.swc.getScrapeWork(target, nil, metaLabels)
+ 		if err != nil {
+ 			logger.Errorf("cannot create kubernetes_sd_config target %q for job_name=%s: %s", target, sc.swc.jobName, err)
+@@ -348,6 +359,7 @@ func (sc *ScrapeConfig) mustStart(baseDir string) {
+ 		}
+ 		return sw
+ 	}
++	// 如果配置了 Kubernetes service discovery configurations  // 根据 k8s 中的名字来抓取目标
+ 	for i := range sc.KubernetesSDConfigs {
+ 		sc.KubernetesSDConfigs[i].MustStart(baseDir, swosFunc)
+ 	}
+@@ -447,11 +459,13 @@ func loadStaticConfigs(path string) ([]StaticConfig, error) {
+ 
+ // loadConfig loads Prometheus config from the given path.
+ func loadConfig(path string) (*Config, error) {
++	// 居然还能配置为 http 路径
+ 	data, err := fscore.ReadFileOrHTTP(path)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("cannot read Prometheus config from %q: %w", path, err)
+ 	}
+ 	var c Config
++	// 解析每个 job
+ 	if err := c.parseData(data, path); err != nil {
+ 		return nil, fmt.Errorf("cannot parse Prometheus config from %q: %w", path, err)
+ 	}
+@@ -491,6 +505,7 @@ func loadScrapeConfigFiles(baseDir string, scrapeConfigFiles []string, isStrict
+ 					continue
+ 				}
+ 			}
++			// 追加到一起
+ 			scrapeConfigs = append(scrapeConfigs, scs...)
+ 		}
+ 	}
+@@ -502,7 +517,9 @@ func IsDryRun() bool {
+ 	return *dryRun
+ }
+ 
++// 解析重要的配置文件 -promscrape.config
+ func (cfg *Config) parseData(data []byte, path string) error {
++	// 把 yaml 填充到结构体
+ 	if err := cfg.unmarshal(data, *strictParse); err != nil {
+ 		cfg.ScrapeConfigs = nil
+ 		return fmt.Errorf("cannot unmarshal data: %w", err)
+@@ -515,15 +532,18 @@ func (cfg *Config) parseData(data []byte, path string) error {
+ 	cfg.baseDir = filepath.Dir(absPath)
+ 
+ 	// Load cfg.ScrapeConfigFiles into c.ScrapeConfigs
++	// 如果配置文件又引用了其他配置文件
+ 	scs, err := loadScrapeConfigFiles(cfg.baseDir, cfg.ScrapeConfigFiles, *strictParse)
+ 	if err != nil {
+ 		return err
+ 	}
+ 	cfg.ScrapeConfigFiles = nil
++	// 把其他引用的配置文件中的 job 追加进去
+ 	cfg.ScrapeConfigs = append(cfg.ScrapeConfigs, scs...)
+ 
+ 	// Check that all the scrape configs have unique JobName
+ 	m := make(map[string]struct{}, len(cfg.ScrapeConfigs))
++	// 检查 job_name 是否重复
+ 	for _, sc := range cfg.ScrapeConfigs {
+ 		jobName := sc.JobName
+ 		if _, ok := m[jobName]; ok {
+@@ -539,16 +559,18 @@ func (cfg *Config) parseData(data []byte, path string) error {
+ 		// Make a copy of sc in order to remove references to `data` memory.
+ 		// This should prevent from memory leaks on config reload.
+ 		sc = sc.clone()
+-
++		// 配置每一个 job
+ 		swc, err := getScrapeWorkConfig(sc, cfg.baseDir, &cfg.Global)
+ 		if err != nil {
+ 			logger.Errorf("skipping `scrape_config` for job_name=%s because of error: %s", sc.JobName, err)
+ 			continue
+ 		}
++		// 记录每个 job 的配置信息, 一个专门的内部对象
+ 		sc.swc = swc
+ 		validScrapeConfigs = append(validScrapeConfigs, sc)
+ 	}
+ 	tailScrapeConfigs := cfg.ScrapeConfigs[len(validScrapeConfigs):]
++	// 全部变成标准对象
+ 	cfg.ScrapeConfigs = validScrapeConfigs
+ 	for i := range tailScrapeConfigs {
+ 		tailScrapeConfigs[i] = nil
+@@ -557,6 +579,7 @@ func (cfg *Config) parseData(data []byte, path string) error {
+ 	return nil
+ }
+ 
++// 这个方法也写得太绕了, 猜测是完全消除字符串引用的影响
+ func (sc *ScrapeConfig) clone() *ScrapeConfig {
+ 	data := sc.marshalJSON()
+ 	var scCopy ScrapeConfig
+@@ -697,6 +720,7 @@ func (cfg *Config) getHetznerSDScrapeWork(prev []*ScrapeWork) []*ScrapeWork {
+ }
+ 
+ // getHTTPDScrapeWork returns `http_sd_configs` ScrapeWork from cfg.
++// 如果配置了 http sd, 使用这个来初始化
+ func (cfg *Config) getHTTPDScrapeWork(prev []*ScrapeWork) []*ScrapeWork {
+ 	visitConfigs := func(sc *ScrapeConfig, visitor func(sdc targetLabelsGetter)) {
+ 		for i := range sc.HTTPSDConfigs {
+@@ -878,6 +902,7 @@ func getScrapeWorkConfig(sc *ScrapeConfig, baseDir string, globalCfg *GlobalConf
+ 	}
+ 	scrapeInterval := sc.ScrapeInterval.Duration()
+ 	if scrapeInterval <= 0 {
++		// 没有 interval 就用全局的
+ 		scrapeInterval = globalCfg.ScrapeInterval.Duration()
+ 		if scrapeInterval <= 0 {
+ 			scrapeInterval = defaultScrapeInterval
+@@ -965,6 +990,7 @@ func getScrapeWorkConfig(sc *ScrapeConfig, baseDir string, globalCfg *GlobalConf
+ 	if sc.EnableCompression != nil {
+ 		disableCompression = !*sc.EnableCompression
+ 	}
++	// 把一个 job 解释为一个专门的对象
+ 	swc := &scrapeWorkConfig{
+ 		scrapeInterval:       scrapeInterval,
+ 		scrapeIntervalString: scrapeInterval.String(),
+@@ -1162,10 +1188,12 @@ func getClusterMemberNumsForScrapeWork(key string, membersCount, replicasCount i
+ 
+ var scrapeWorkKeyBufPool bytesutil.ByteBufferPool
+ 
++// 这个函数，猜测是：请求 k8s api server, 得到了 某个服务的全部 exporter 的地址
+ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabels *promutil.Labels) (*ScrapeWork, error) {
+ 	labels := promutil.GetLabels()
+ 	defer promutil.PutLabels(labels)
+-
++	
++	// 整理好每个 target 的标签
+ 	mergeLabels(labels, swc, target, extraLabels, metaLabels)
+ 	var originalLabels *promutil.Labels
+ 	if !*dropOriginalLabels {
+@@ -1186,6 +1214,7 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
+ 	// Perform the verification on labels after the relabeling in order to guarantee that targets with the same set of labels
+ 	// go to the same vmagent shard.
+ 	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1687#issuecomment-940629495
++	// 如果 expoter 需要分片处理
+ 	if *clusterMembersCount > 1 {
+ 		bb := scrapeWorkKeyBufPool.Get()
+ 		bb.B = appendScrapeWorkKey(bb.B[:0], labels)
+@@ -1295,6 +1324,7 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
+ 
+ 	originalLabels = sortOriginalLabelsIfNeeded(originalLabels)
+ 	sw := &ScrapeWork{
++		// 最终得到了 exporter 的访问地址，然后返回一个对象
+ 		ScrapeURL:            scrapeURL,
+ 		ScrapeInterval:       scrapeInterval,
+ 		ScrapeTimeout:        scrapeTimeout,
+diff --git a/lib/promscrape/discovery/kubernetes/api.go b/lib/promscrape/discovery/kubernetes/api.go
+index 7ef6c4464..b79405c9f 100644
+--- a/lib/promscrape/discovery/kubernetes/api.go
++++ b/lib/promscrape/discovery/kubernetes/api.go
+@@ -9,6 +9,7 @@ import (
+ 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promauth"
+ )
+ 
++// 根据 k8s 的 name，找到 k8s api server
+ func newAPIConfig(sdc *SDConfig, baseDir string, swcFunc ScrapeWorkConstructorFunc) (*apiConfig, error) {
+ 	role := sdc.role()
+ 	switch role {
+@@ -17,6 +18,7 @@ func newAPIConfig(sdc *SDConfig, baseDir string, swcFunc ScrapeWorkConstructorFu
+ 		return nil, fmt.Errorf("unexpected `role`: %q; must be one of `node`, `pod`, `service`, `endpoints`, `endpointslice` or `ingress`", role)
+ 	}
+ 	cc := &sdc.HTTPClientConfig
++	// ??? 生成 http client ?
+ 	ac, err := cc.NewConfig(baseDir)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("cannot parse auth config: %w", err)
+@@ -54,6 +56,7 @@ func newAPIConfig(sdc *SDConfig, baseDir string, swcFunc ScrapeWorkConstructorFu
+ 		// Discover apiServer and auth config according to k8s docs.
+ 		// See https://kubernetes.io/docs/reference/access-authn-authz/service-accounts-admin/#service-account-admission-controller
+ 		host := os.Getenv("KUBERNETES_SERVICE_HOST")
++		// 通过环境变量，找到 k8s api server 的地址
+ 		port := os.Getenv("KUBERNETES_SERVICE_PORT")
+ 		if len(host) == 0 {
+ 			return nil, fmt.Errorf("cannot find KUBERNETES_SERVICE_HOST env var; it must be defined when running in k8s; " +
+@@ -74,6 +77,7 @@ func newAPIConfig(sdc *SDConfig, baseDir string, swcFunc ScrapeWorkConstructorFu
+ 			TLSConfig:       &tlsConfig,
+ 			Headers:         cc.Headers,
+ 		}
++		// 得到一个 k8s api server 相关的对象
+ 		acNew, err := opts.NewConfig()
+ 		if err != nil {
+ 			return nil, fmt.Errorf("cannot initialize service account auth: %w; probably, `kubernetes_sd_config->api_server` is missing in Prometheus configs?", err)
+@@ -90,6 +94,7 @@ func newAPIConfig(sdc *SDConfig, baseDir string, swcFunc ScrapeWorkConstructorFu
+ 	for strings.HasSuffix(apiServer, "/") {
+ 		apiServer = apiServer[:len(apiServer)-1]
+ 	}
++	// 包含了 k8s api server 的 http client
+ 	aw, err := newAPIWatcher(apiServer, ac, sdc, swcFunc)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("cannot initialize Kubernetes API watcher: %w", err)
+diff --git a/lib/promscrape/discovery/kubernetes/api_watcher.go b/lib/promscrape/discovery/kubernetes/api_watcher.go
+index 22491f28c..18e1c7291 100644
+--- a/lib/promscrape/discovery/kubernetes/api_watcher.go
++++ b/lib/promscrape/discovery/kubernetes/api_watcher.go
+@@ -92,6 +92,7 @@ func newAPIWatcher(apiServer string, ac *promauth.Config, sdc *SDConfig, swcFunc
+ 		attachNodeMetadata = sdc.AttachMetadata.Node
+ 	}
+ 	proxyURL := sdc.ProxyURL.GetURL()
++	// 取得 api server 对应的 http client
+ 	gw := getGroupWatcher(apiServer, ac, namespaces, selectors, attachNodeMetadata, proxyURL)
+ 	role := sdc.role()
+ 	aw := &apiWatcher{
+@@ -317,8 +318,10 @@ func getGroupWatcher(apiServer string, ac *promauth.Config, namespaces []string,
+ 	key := fmt.Sprintf("apiServer=%s, namespaces=%s, selectors=%s, attachNodeMetadata=%v, proxyURL=%s, authConfig=%s",
+ 		apiServer, namespaces, selectorsKey(selectors), attachNodeMetadata, proxyURLStr, ac.String())
+ 	groupWatchersLock.Lock()
++	// 以 k8s api server 的某些关键字段为 key，复用 groupWatcher 对象
+ 	gw := groupWatchers[key]
+ 	if gw == nil {
++		// 每个 k8s api server 对应着一个 http client
+ 		gw = newGroupWatcher(apiServer, ac, namespaces, selectors, attachNodeMetadata, proxyURL)
+ 		groupWatchers[key] = gw
+ 	}
+@@ -336,6 +339,7 @@ func selectorsKey(selectors []Selector) string {
+ 
+ var (
+ 	groupWatchersLock sync.Mutex
++	// 所有的 k8s api server
+ 	groupWatchers     map[string]*groupWatcher
+ 
+ 	_ = metrics.NewGauge(`vm_promscrape_discovery_kubernetes_group_watchers`, func() float64 {
+@@ -487,6 +491,7 @@ func (gw *groupWatcher) startWatchersForRole(role string, aw *apiWatcher) {
+ 				// This should guarantee that the ScrapeWork objects for these objects are properly updated
+ 				// as soon as the objects they depend on are updated.
+ 				// This should fix https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1240 .
++				// 每个 job 都有一个独立的协程，来定期拉取 exporter 的详细地址 ???
+ 				go uw.recreateScrapeWorks()
+ 			}
+ 		}
+@@ -619,6 +624,7 @@ func (uw *urlWatcher) recreateScrapeWorks() {
+ 		case <-t.C:
+ 			timerpool.Put(t)
+ 		}
++		// 5 秒钟检查一次 k8s api server
+ 		startTime := time.Now()
+ 		gw.mu.Lock()
+ 		if uw.needRecreateScrapeWorks {
+diff --git a/lib/promscrape/discovery/kubernetes/kubernetes.go b/lib/promscrape/discovery/kubernetes/kubernetes.go
+index b96dd9891..670548099 100644
+--- a/lib/promscrape/discovery/kubernetes/kubernetes.go
++++ b/lib/promscrape/discovery/kubernetes/kubernetes.go
+@@ -32,7 +32,7 @@ type SDConfig struct {
+ 	Namespaces       Namespaces                `yaml:"namespaces,omitempty"`
+ 	Selectors        []Selector                `yaml:"selectors,omitempty"`
+ 	AttachMetadata   *AttachMetadata           `yaml:"attach_metadata,omitempty"`
+-
++	// k8s api server 相关的对象, 包含一个 http client
+ 	cfg      *apiConfig
+ 	startErr error
+ }
+@@ -85,12 +85,15 @@ func (sdc *SDConfig) GetScrapeWorkObjects() ([]any, error) {
+ // MustStart initializes sdc before its usage.
+ //
+ // swcFunc is used for constructing ScrapeWork objects from the given metadata.
++// 配置了 k8s 对象名字的时候，做进一步处理
+ func (sdc *SDConfig) MustStart(baseDir string, swcFunc ScrapeWorkConstructorFunc) {
++	// 找到 k8s api server 的 http client
+ 	cfg, err := newAPIConfig(sdc, baseDir, swcFunc)
+ 	if err != nil {
+ 		sdc.startErr = fmt.Errorf("cannot create API config for kubernetes: %w", err)
+ 		return
+ 	}
++	// 猜测是每个 job 一个协程，去 5 秒一次，请求 api server，获取 exporter 的详细地址
+ 	cfg.aw.mustStart()
+ 	sdc.cfg = cfg
+ }
+diff --git a/lib/promscrape/scraper.go b/lib/promscrape/scraper.go
+index bcaab8c6c..e52f609b4 100644
+--- a/lib/promscrape/scraper.go
++++ b/lib/promscrape/scraper.go
+@@ -58,6 +58,7 @@ func CheckConfig() error {
+ 	if *promscrapeConfigFile == "" {
+ 		return nil
+ 	}
++	// 仅检查配置，但是不使用解析好的对象
+ 	_, err := loadConfig(*promscrapeConfigFile)
+ 	return err
+ }
+@@ -66,11 +67,14 @@ func CheckConfig() error {
+ //
+ // Scraped data is passed to pushData.
+ func Init(pushData func(at *auth.Token, wr *prompb.WriteRequest)) {
++	// 计算 targets 分片的编号
+ 	mustInitClusterMemberID()
+ 	globalStopChan = make(chan struct{})
+ 	scraperWG.Add(1)
++	// 独立一个协程加载配置。为了加快启动速度
+ 	go func() {
+ 		defer scraperWG.Done()
++		// 这个函数里面加载了配置
+ 		runScraper(*promscrapeConfigFile, pushData, globalStopChan)
+ 	}()
+ }
+@@ -89,6 +93,7 @@ var (
+ 	PendingScrapeConfigs atomic.Int32
+ 
+ 	// configData contains -promscrape.config data
++	// ??? 为什么要把配置序列化后再存起来
+ 	configData atomic.Pointer[[]byte]
+ )
+ 
+@@ -116,12 +121,14 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompb.Writ
+ 	sighupCh := procutil.NewSighupChan()
+ 
+ 	logger.Infof("reading scrape configs from %q", configFile)
++	// 第一次启动的时候加载配置
+ 	cfg, err := loadConfig(configFile)
+ 	if err != nil {
+ 		logger.Fatalf("cannot read %q: %s", configFile, err)
+ 	}
+ 	marshaledData := cfg.marshal()
+ 	configData.Store(&marshaledData)
++	// 使用 jobName 初始化全局对象. 包含了 k8s api server 的 http client, 会拉取 k8s name 对应的所有 target 地址
+ 	cfg.mustStart()
+ 
+ 	configSuccess.Set(1)
+@@ -159,6 +166,7 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompb.Writ
+ 		defer ticker.Stop()
+ 	}
+ 	for {
++		// 猜测是把其他途径获得的 job 配置，追加到全局的 cfg 对象中
+ 		scs.updateConfig(cfg)
+ 	waitForChans:
+ 		select {
+@@ -181,6 +189,7 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompb.Writ
+ 			configData.Store(&marshaledData)
+ 			configReloads.Inc()
+ 			configTimestamp.Set(fasttime.UnixTimestamp())
++		// 定期检查配置文件是否有变化
+ 		case <-tickerCh:
+ 			cfgNew, err := loadConfig(configFile)
+ 			if err != nil {
+diff --git a/lib/promscrape/targetstatus.go b/lib/promscrape/targetstatus.go
+index f8145faee..dfa3b22ff 100644
+--- a/lib/promscrape/targetstatus.go
++++ b/lib/promscrape/targetstatus.go
+@@ -87,6 +87,7 @@ func WriteAPIV1Targets(w io.Writer, state, scrapePool string) {
+ 	fmt.Fprintf(w, `}}`)
+ }
+ 
++// 以 jobName 为单位
+ type targetStatusMap struct {
+ 	mu       sync.Mutex
+ 	m        map[*scrapeWork]*targetStatus
+diff --git a/lib/storage/block.go b/lib/storage/block.go
+index 53c8653aa..d57b36672 100644
+--- a/lib/storage/block.go
++++ b/lib/storage/block.go
+@@ -321,6 +321,7 @@ func checkTimestampsBounds(timestamps []int64, minTimestamp, maxTimestamp int64)
+ // AppendRowsWithTimeRangeFilter filters samples from b according to tr and appends them to dst*.
+ //
+ // It is expected that UnmarshalData has been already called on b.
++// 根据起止时间进行过滤
+ func (b *Block) AppendRowsWithTimeRangeFilter(dstTimestamps []int64, dstValues []float64, tr TimeRange) ([]int64, []float64) {
+ 	timestamps, values := b.filterTimestamps(tr)
+ 	dstTimestamps = append(dstTimestamps, timestamps...)
+@@ -328,6 +329,7 @@ func (b *Block) AppendRowsWithTimeRangeFilter(dstTimestamps []int64, dstValues [
+ 	return dstTimestamps, dstValues
+ }
+ 
++// 根据起止时间，过滤掉一部分 timestamp
+ func (b *Block) filterTimestamps(tr TimeRange) ([]int64, []int64) {
+ 	timestamps := b.timestamps
+ 
+diff --git a/lib/storage/dedup.go b/lib/storage/dedup.go
+index 8dda3cf0d..adcd0716c 100644
+--- a/lib/storage/dedup.go
++++ b/lib/storage/dedup.go
+@@ -11,15 +11,18 @@ import (
+ // De-duplication is disabled if dedupInterval is 0.
+ //
+ // This function must be called before initializing the storage.
++// 设置 dedup 间隔
+ func SetDedupInterval(dedupInterval time.Duration) {
+ 	globalDedupInterval = dedupInterval.Milliseconds()
+ }
+ 
+ // GetDedupInterval returns the dedup interval in milliseconds, which has been set via SetDedupInterval.
+ func GetDedupInterval() int64 {
++	// 返回全局的 dedup 时间配置
+ 	return globalDedupInterval
+ }
+ 
++// 全局的 dedup 时间间隔设置
+ var globalDedupInterval int64
+ 
+ func isDedupEnabled() bool {
+@@ -30,16 +33,20 @@ func isDedupEnabled() bool {
+ // DeduplicateSamples treats StaleNaN (Prometheus stale markers) as values and doesn't skip them on purpose - see
+ // https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5587
+ func DeduplicateSamples(srcTimestamps []int64, srcValues []float64, dedupInterval int64) ([]int64, []float64) {
++	// 通过时间戳来判断是否需要 dedup  // 重复时间戳一定会走到这里
+ 	if !needsDedup(srcTimestamps, dedupInterval) {
+ 		// Fast path - nothing to deduplicate
+ 		return srcTimestamps, srcValues
+ 	}
+ 	tsNext := srcTimestamps[0] + dedupInterval - 1
++	// 计算得到重复时间戳出现的范围
+ 	tsNext -= tsNext % dedupInterval
+ 	dstTimestamps := srcTimestamps[:0]
+ 	dstValues := srcValues[:0]
++	// 假设是  60 60 75
+ 	for i, ts := range srcTimestamps[1:] {
+ 		if ts <= tsNext {
++			// 时间戳重合，则跳过这个元素，相当于删除
+ 			continue
+ 		}
+ 		// Choose the maximum value with the timestamp equal to tsPrev.
+@@ -47,6 +54,7 @@ func DeduplicateSamples(srcTimestamps []int64, srcValues []float64, dedupInterva
+ 		j := i
+ 		tsPrev := srcTimestamps[j]
+ 		vPrev := srcValues[j]
++		// 往前找
+ 		for j > 0 && srcTimestamps[j-1] == tsPrev {
+ 			j--
+ 			if decimal.IsStaleNaN(srcValues[j]) {
+@@ -66,6 +74,7 @@ func DeduplicateSamples(srcTimestamps []int64, srcValues []float64, dedupInterva
+ 			tsNext = ts + dedupInterval - 1
+ 			tsNext -= tsNext % dedupInterval
+ 		}
++		// 从上面可以看出， dedup 只与时间相关
+ 	}
+ 	j := len(srcTimestamps) - 1
+ 	tsPrev := srcTimestamps[j]
+@@ -152,13 +161,18 @@ func deduplicateSamplesDuringMerge(srcTimestamps, srcValues []int64, dedupInterv
+ 	return dstTimestamps, dstValues
+ }
+ 
++// 通过时间戳来判断是否需要 dedup
+ func needsDedup(timestamps []int64, dedupInterval int64) bool {
+ 	if len(timestamps) < 2 || dedupInterval <= 0 {
+ 		return false
+ 	}
++	// eg:  60s + 15s -1 =>  74s
+ 	tsNext := timestamps[0] + dedupInterval - 1
++	// 猜测是偏移了一个 interval 的间隔  // 74s % 15s => 14,  74- 14 => 60s
+ 	tsNext -= tsNext % dedupInterval
++	// tsNext 是期望出现的重复时间戳
+ 	for _, ts := range timestamps[1:] {
++		// 下一个时间戳出现在了重复时间戳的范围内，就认为是需要做时间去重的
+ 		if ts <= tsNext {
+ 			return true
+ 		}
+@@ -168,5 +182,6 @@ func needsDedup(timestamps []int64, dedupInterval int64) bool {
+ 			tsNext -= tsNext % dedupInterval
+ 		}
+ 	}
++	// 如果所有的点，都在 dedup 时间之后出现。则认为不需要 dedup
+ 	return false
+ }
+diff --git a/lib/streamaggr/streamaggr.go b/lib/streamaggr/streamaggr.go
+index 458365487..b98e23a68 100644
+--- a/lib/streamaggr/streamaggr.go
++++ b/lib/streamaggr/streamaggr.go
+@@ -284,14 +284,18 @@ func LoadFromData(data []byte, pushFunc PushFunc, opts *Options, alias string) (
+ 	return loadFromData(data, "inmemory", pushFunc, opts, alias)
+ }
+ 
++// @param pushFunc PushFunc: rwctx.pushInternalTrackDropped
+ func loadFromData(data []byte, filePath string, pushFunc PushFunc, opts *Options, alias string) (*Aggregators, error) {
++	// 为什么文件里的格式是数组?  => 确实是数组格式
+ 	var cfgs []*Config
++	// 解析配置文件 -remoteWrite.streamAggr.config=xx.yaml
+ 	if err := yaml.UnmarshalStrict(data, &cfgs); err != nil {
+ 		return nil, fmt.Errorf("cannot parse stream aggregation config: %w", err)
+ 	}
+ 
+ 	ms := metrics.NewSet()
+ 	as := make([]*aggregator, len(cfgs))
++	// 可以配置很多聚合器
+ 	for i, cfg := range cfgs {
+ 		a, err := newAggregator(cfg, filePath, pushFunc, ms, opts, alias, i+1)
+ 		if err != nil {
+@@ -310,6 +314,7 @@ func loadFromData(data []byte, filePath string, pushFunc PushFunc, opts *Options
+ 
+ 	metrics.RegisterSet(ms)
+ 	return &Aggregators{
++		// 聚合器的数组
+ 		as:         as,
+ 		configData: configData,
+ 		filePath:   filePath,
+@@ -359,9 +364,12 @@ func (a *Aggregators) Equal(b *Aggregators) bool {
+ // Push returns matchIdxs with len equal to len(tss).
+ // It reuses the matchIdxs if it has enough capacity to hold len(tss) items.
+ // Otherwise it allocates new matchIdxs.
++// 聚合器的计算逻辑
+ func (a *Aggregators) Push(tss []prompb.TimeSeries, matchIdxs []byte) []byte {
++	// 猜测是把这个当成 bitmap 使用了
+ 	matchIdxs = bytesutil.ResizeNoCopyMayOverallocate(matchIdxs, len(tss))
+ 	for i := range matchIdxs {
++		// 对 buffer 设置为 0 吗?  这么写太慢了吧  // todo: 应该用 mem set 0
+ 		matchIdxs[i] = 0
+ 	}
+ 	if a == nil {
+@@ -461,8 +469,10 @@ type aggrPushFunc func([]pushSample, int64, bool)
+ // opts can contain additional options. If opts is nil, then default options are used.
+ //
+ // The returned aggregator must be stopped when no longer needed by calling MustStop().
++// @param pushFunc PushFunc, rwctx.pushInternalTrackDropped
+ func newAggregator(cfg *Config, path string, pushFunc PushFunc, ms *metrics.Set, opts *Options, alias string, aggrID int) (*aggregator, error) {
+ 	// check cfg.Interval
++	// 检查配置文件中的每一项配置
+ 	if cfg.Interval == "" {
+ 		return nil, fmt.Errorf("missing `interval` option")
+ 	}
+@@ -676,6 +686,7 @@ func newAggregator(cfg *Config, path string, pushFunc PushFunc, ms *metrics.Set,
+ 
+ 	alignFlushToInterval := !opts.NoAlignFlushToInterval
+ 	if v := cfg.NoAlignFlushToInterval; v != nil {
++		// 配置文件中的配置覆盖命令行中的配置
+ 		alignFlushToInterval = !*v
+ 	}
+ 
+@@ -706,6 +717,7 @@ func newAggregator(cfg *Config, path string, pushFunc PushFunc, ms *metrics.Set,
+ 
+ 	a.wg.Add(1)
+ 	go func() {
++		// 为什么 pushFunc 只调用了一次?
+ 		a.runFlusher(pushFunc, alignFlushToInterval, skipIncompleteFlush, ignoreFirstIntervals)
+ 		a.wg.Done()
+ 	}()
+@@ -790,6 +802,7 @@ func newOutputConfig(output string, outputsSeen map[string]struct{}, useSharedSt
+ }
+ 
+ func (a *aggregator) runFlusher(pushFunc PushFunc, alignFlushToInterval, skipIncompleteFlush bool, ignoreFirstIntervals int) {
++	// 创建好一条规则对应的对象后，创建了一个单独的协程
+ 	minTime := time.UnixMilli(a.minDeadline.Load())
+ 	flushTime := minTime.Add(a.interval)
+ 	interval := a.interval
+@@ -813,6 +826,7 @@ func (a *aggregator) runFlusher(pushFunc PushFunc, alignFlushToInterval, skipInc
+ 		select {
+ 		case <-a.stopCh:
+ 			return false
++		// 定时器
+ 		case <-t.C:
+ 			return true
+ 		}
+@@ -820,12 +834,15 @@ func (a *aggregator) runFlusher(pushFunc PushFunc, alignFlushToInterval, skipInc
+ 
+ 	alignedSleep()
+ 
++	// 每隔 interval 时间间隔就 flush 一次
+ 	t := time.NewTicker(interval)
+ 	defer t.Stop()
+ 
+ 	var fa *histogram.Fast
++	// 循环的定时处理
+ 	for tickerWait(t) {
+ 		pf := pushFunc
++		// 函数 remoteWriteCtx.pushInternalTrackDropped
+ 		if a.enableWindows {
+ 			// Calculate delay and wait
+ 			a.muFlushAfter.Lock()
+@@ -951,6 +968,7 @@ func (a *aggregator) MustStop() {
+ }
+ 
+ // Push pushes tss to a.
++// 每一个聚合器表达式的计算逻辑
+ func (a *aggregator) Push(tss []prompb.TimeSeries, matchIdxs []byte) {
+ 	ctx := getPushCtx()
+ 	defer putPushCtx(ctx)
+@@ -971,10 +989,12 @@ func (a *aggregator) Push(tss []prompb.TimeSeries, matchIdxs []byte) {
+ 	cs := a.cs.Load()
+ 
+ 	var maxLagMsec int64
++	// 遍历每一条 time series
+ 	for idx, ts := range tss {
+ 		if !a.match.Match(ts.Labels) {
+ 			continue
+ 		}
++		// bitmap 设置为 1
+ 		matchIdxs[idx] = 1
+ 
+ 		if len(dropLabels) > 0 {
+diff --git a/lib/vmselectapi/api.go b/lib/vmselectapi/api.go
+index 0d91bbaac..64816be80 100644
+--- a/lib/vmselectapi/api.go
++++ b/lib/vmselectapi/api.go
+@@ -6,6 +6,7 @@ import (
+ )
+ 
+ // API must implement vmselect API.
++// 对存储层的抽象
+ type API interface {
+ 	// InitSearch initialize series search for the given sq.
+ 	//
+diff --git a/lib/vmselectapi/server.go b/lib/vmselectapi/server.go
+index 3e64c4f5b..6c1853f50 100644
+--- a/lib/vmselectapi/server.go
++++ b/lib/vmselectapi/server.go
+@@ -100,6 +100,7 @@ type Limits struct {
+ // NewServer starts new Server at the given addr, which serves the given api with the given limits.
+ //
+ // If disableResponseCompression is set to true, then the returned server doesn't compress responses.
++// 启动级联服务
+ func NewServer(addr string, api API, limits Limits, disableResponseCompression bool) (*Server, error) {
+ 	ln, err := netutil.NewTCPListener("vmselect", addr, false, nil)
+ 	if err != nil {
+@@ -113,11 +114,13 @@ func NewServer(addr string, api API, limits Limits, disableResponseCompression b
+ 		return float64(len(concurrencyLimitCh))
+ 	})
+ 	s := &Server{
++		// 这个与 级联的处理对象相关
+ 		api:                        api,
+ 		limits:                     limits,
+ 		disableResponseCompression: disableResponseCompression,
+ 		ln:                         ln,
+ 
++		// 允许的最大并发查询数
+ 		concurrencyLimitCh: concurrencyLimitCh,
+ 
+ 		concurrencyLimitReached: metrics.NewCounter(fmt.Sprintf(`vm_vmselect_concurrent_requests_limit_reached_total{addr=%q}`, addr)),
+@@ -144,6 +147,7 @@ func NewServer(addr string, api API, limits Limits, disableResponseCompression b
+ 	s.connsMap.Init("vmselect")
+ 	s.wg.Add(1)
+ 	go func() {
++		// 独立协程中启动服务
+ 		s.run()
+ 		s.wg.Done()
+ 	}()
+@@ -153,6 +157,7 @@ func NewServer(addr string, api API, limits Limits, disableResponseCompression b
+ func (s *Server) run() {
+ 	logger.Infof("accepting vmselect conns at %s", s.ln.Addr())
+ 	for {
++		// 新连接进入
+ 		c, err := s.ln.Accept()
+ 		if err != nil {
+ 			if pe, ok := err.(net.Error); ok && pe.Temporary() {
+@@ -173,6 +178,7 @@ func (s *Server) run() {
+ 		}
+ 		s.vmselectConns.Inc()
+ 		s.wg.Add(1)
++		// 每个客户端一个协程
+ 		go func() {
+ 			defer func() {
+ 				s.connsMap.Delete(c)
+@@ -212,6 +218,7 @@ func (s *Server) run() {
+ 			defer func() {
+ 				_ = bc.Close()
+ 			}()
++			// 处理连接上的请求。猜测会卡在这里
+ 			if err := s.processConn(bc); err != nil {
+ 				if s.isStopping() {
+ 					return
+@@ -255,6 +262,7 @@ func (s *Server) processConn(bc *handshake.BufferedConn) error {
+ 		sizeBuf: make([]byte, 8),
+ 	}
+ 	for {
++		// 逐个处理请求
+ 		if err := s.processRequest(ctx); err != nil {
+ 			if isExpectedError(err) {
+ 				return nil
+@@ -399,6 +407,7 @@ func (ctx *vmselectRequestCtx) readSearchQuery() error {
+ 
+ func (ctx *vmselectRequestCtx) readDataBufBytes(maxDataSize int) error {
+ 	ctx.sizeBuf = bytesutil.ResizeNoCopyMayOverallocate(ctx.sizeBuf, 8)
++	// 读 8 字节，作为命令
+ 	if _, err := io.ReadFull(ctx.bc, ctx.sizeBuf); err != nil {
+ 		if err == io.EOF {
+ 			return err
+@@ -489,10 +498,12 @@ func (ctx *vmselectRequestCtx) writeUint64(n uint64) error {
+ 
+ const maxRPCNameSize = 128
+ 
++// 处理一个请求
+ func (s *Server) processRequest(ctx *vmselectRequestCtx) error {
+ 	// Read rpcName
+ 	// Do not set deadline on reading rpcName, since it may take a
+ 	// lot of time for idle connection.
++	// 读出命令部分
+ 	if err := ctx.readDataBufBytes(maxRPCNameSize); err != nil {
+ 		if err == io.EOF {
+ 			// Remote client gracefully closed the connection.
+@@ -526,6 +537,7 @@ func (s *Server) processRequest(ctx *vmselectRequestCtx) error {
+ 	ctx.deadline = fasttime.UnixTimestamp() + uint64(timeout)
+ 
+ 	// Process the rpcName call.
++	// 上面读出了所有参数
+ 	if err := s.processRPC(ctx, rpcName); err != nil {
+ 		return fmt.Errorf("cannot execute %q: %w", rpcName, err)
+ 	}
+@@ -542,6 +554,7 @@ func (s *Server) processRequest(ctx *vmselectRequestCtx) error {
+ func (s *Server) beginConcurrentRequest(ctx *vmselectRequestCtx) error {
+ 	select {
+ 	case s.concurrencyLimitCh <- struct{}{}:
++		// 能写进去，就退出。代表占位成功
+ 		return nil
+ 	default:
+ 		d := time.Duration(ctx.timeout) * time.Second
+@@ -555,6 +568,7 @@ func (s *Server) beginConcurrentRequest(ctx *vmselectRequestCtx) error {
+ 			timerpool.Put(t)
+ 			ctx.qt.Printf("wait in queue because -%s=%d concurrent requests are executed", s.limits.MaxConcurrentRequestsFlagName, s.limits.MaxConcurrentRequests)
+ 			return nil
++		// 到了等待时间，仍然无法入队，则查询失败
+ 		case <-t.C:
+ 			timerpool.Put(t)
+ 			s.concurrencyLimitTimeout.Inc()
+@@ -572,6 +586,7 @@ func (s *Server) endConcurrentRequest() {
+ }
+ 
+ func (s *Server) processRPC(ctx *vmselectRequestCtx, rpcName string) error {
++	// 解析 vmstorage 的处理指令
+ 	switch rpcName {
+ 	case "search_v7":
+ 		return s.processSearch(ctx)
+@@ -1038,23 +1053,30 @@ func (s *Server) processSearchMetricNames(ctx *vmselectRequestCtx) error {
+ 	return nil
+ }
+ 
++// 处理 vmstorage 的查询请求
+ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
+ 	s.searchRequests.Inc()
+ 
+ 	// Read request.
++	// 读出查询的参数
+ 	if err := ctx.readSearchQuery(); err != nil {
+ 		return err
+ 	}
++	// 占用一个并发位置。如果占不到，则阻塞等待
+ 	if err := s.beginConcurrentRequest(ctx); err != nil {
+ 		return ctx.writeErrorMessage(err)
+ 	}
++	// 指定完成后，把并发的占位还回去
+ 	defer s.endConcurrentRequest()
+ 
+ 	// Initiaialize the search.
++	// 由具体的 api 对象来执行逻辑.
++	// 如果 api 是级联的逻辑，则会走到级联逻辑去
+ 	bi, err := s.api.InitSearch(ctx.qt, &ctx.sq, ctx.deadline)
+ 	if err != nil {
+ 		return ctx.writeErrorMessage(err)
+ 	}
++	// bi 里面创建了独立的协程
+ 	defer bi.MustClose()
+ 
+ 	// Send empty error message to vmselect.
+@@ -1063,6 +1085,7 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
+ 	}
+ 
+ 	// Send found blocks to vmselect.
++	// 得到数据后，直接发送，没有做计算
+ 	blocksRead := 0
+ 	for bi.NextBlock(&ctx.mb) {
+ 		blocksRead++

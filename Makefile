@@ -1,17 +1,17 @@
 
-vm:
+vm:  # not works
 	mkdir -p VictoriaMetrics/VictoriaMetrics && \
 	git submodule add -b cluster https://github.com/VictoriaMetrics/VictoriaMetrics.git VictoriaMetrics/VictoriaMetrics
 
 
-submodule_update:
+submodule_update:  # not works
 	git submodule update --init --remote --recursive
 
 vm_clone:
 	git clone --branch cluster --recurse-submodules https://github.com/VictoriaMetrics/VictoriaMetrics.git VictoriaMetrics/VictoriaMetrics/
 
 diff:
-	mkdir -p patches/VictoriaMetrics/VictoriaMetrics/ &&
+	mkdir -p patches/VictoriaMetrics/VictoriaMetrics/ && \
 	cd VictoriaMetrics/VictoriaMetrics && \
 	git diff > ../../patches/VictoriaMetrics/VictoriaMetrics/comment.patch
 
