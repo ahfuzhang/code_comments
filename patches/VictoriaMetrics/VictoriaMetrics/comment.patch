@@ -1,0 +1,13 @@
+diff --git a/README.md b/README.md
+index 27443d094..2b5b0a3f2 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,8 @@
++VictoriaMetrics 群集版的源码注释。
++
++
++----
++
+ # VictoriaMetrics
+ 
+ [![Latest Release](https://img.shields.io/github/v/release/VictoriaMetrics/VictoriaMetrics?sort=semver&label=&filter=!*-victorialogs&logo=github&labelColor=gray&color=gray&link=https%3A%2F%2Fgithub.com%2FVictoriaMetrics%2FVictoriaMetrics%2Freleases%2Flatest)](https://github.com/VictoriaMetrics/VictoriaMetrics/releases)

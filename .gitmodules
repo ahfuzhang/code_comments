@@ -1,0 +1,6 @@
+[submodule "VictoriaMetrics/VictoriaMetrics"]
+	path = VictoriaMetrics/VictoriaMetrics
+	url = https://github.com/VictoriaMetrics/VictoriaMetrics
+	tag = victoria-metrics-cluster
+    branch = cluster
+    
