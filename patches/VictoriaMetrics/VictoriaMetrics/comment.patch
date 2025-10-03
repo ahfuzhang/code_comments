@@ -1411,6 +1411,95 @@ index 8dda3cf0d..adcd0716c 100644
 +	// 如果所有的点，都在 dedup 时间之后出现。则认为不需要 dedup
  	return false
  }
+diff --git a/lib/storage/storage.go b/lib/storage/storage.go
+index cc4016774..4fc4632a5 100644
+--- a/lib/storage/storage.go
++++ b/lib/storage/storage.go
+@@ -47,9 +47,10 @@ type Storage struct {
+ 	tooBigTimestampRows   atomic.Uint64
+ 	invalidRawMetricNames atomic.Uint64
+ 
+-	timeseriesRepopulated  atomic.Uint64
+-	timeseriesPreCreated   atomic.Uint64
+-	newTimeseriesCreated   atomic.Uint64
++	timeseriesRepopulated atomic.Uint64
++	timeseriesPreCreated  atomic.Uint64
++	newTimeseriesCreated  atomic.Uint64
++	// 这个用于记录慢插入的行数
+ 	slowRowInserts         atomic.Uint64
+ 	slowPerDayIndexInserts atomic.Uint64
+ 
+@@ -606,9 +607,10 @@ type Metrics struct {
+ 	TooBigTimestampRows   uint64
+ 	InvalidRawMetricNames uint64
+ 
+-	TimeseriesRepopulated  uint64
+-	TimeseriesPreCreated   uint64
+-	NewTimeseriesCreated   uint64
++	TimeseriesRepopulated uint64
++	TimeseriesPreCreated  uint64
++	NewTimeseriesCreated  uint64
++	// 这里对慢插入的行数进行计数
+ 	SlowRowInserts         uint64
+ 	SlowPerDayIndexInserts uint64
+ 
+@@ -695,6 +697,7 @@ func (s *Storage) UpdateMetrics(m *Metrics) {
+ 	m.TimeseriesRepopulated += s.timeseriesRepopulated.Load()
+ 	m.TimeseriesPreCreated += s.timeseriesPreCreated.Load()
+ 	m.NewTimeseriesCreated += s.newTimeseriesCreated.Load()
++	// 这里对慢插入的行数进行计数
+ 	m.SlowRowInserts += s.slowRowInserts.Load()
+ 	m.SlowPerDayIndexInserts += s.slowPerDayIndexInserts.Load()
+ 
+@@ -2136,6 +2139,7 @@ func (s *Storage) add(rows []rawRow, dstMrs []*MetricRow, mrs []MetricRow, preci
+ 	)
+ 	var metricNameBuf []byte
+ 
++	// 变量用于记录慢插入的行数
+ 	var slowInsertsCount uint64
+ 	var newSeriesCount uint64
+ 	var seriesRepopulated uint64
+@@ -2200,6 +2204,7 @@ func (s *Storage) add(rows []rawRow, dstMrs []*MetricRow, mrs []MetricRow, preci
+ 			continue
+ 		}
+ 
++		// 当前的 metric 在 tsid cache 中查询，查到后就知道了 metric 对应的 tsid
+ 		if s.getTSIDFromCache(&genTSID, mr.MetricNameRaw) {
+ 			// Fast path - the TSID for the given mr.MetricNameRaw has been found in cache and isn't deleted.
+ 			// There is no need in checking whether r.TSID.MetricID is deleted, since tsidCache doesn't
+@@ -2233,6 +2238,7 @@ func (s *Storage) add(rows []rawRow, dstMrs []*MetricRow, mrs []MetricRow, preci
+ 		}
+ 
+ 		// Slow path - the TSID for the given mr.MetricNameRaw is missing in the cache.
++		// tsid cache没有命中，则走入慢写入的流程
+ 		slowInsertsCount++
+ 
+ 		// Construct canonical metric name - it is used below.
+@@ -2262,6 +2268,7 @@ func (s *Storage) add(rows []rawRow, dstMrs []*MetricRow, mrs []MetricRow, preci
+ 				genTSID.generation = generation
+ 				seriesRepopulated++
+ 			}
++			// 从现象说明，这里写入 tsid cache 并未生效
+ 			s.storeTSIDToCaches(mr.MetricNameRaw, &genTSID, date)
+ 
+ 			r.TSID = genTSID.TSID
+@@ -2277,6 +2284,7 @@ func (s *Storage) add(rows []rawRow, dstMrs []*MetricRow, mrs []MetricRow, preci
+ 
+ 		createAllIndexesForMetricName(idbCurr, mn, &genTSID.TSID, date)
+ 		genTSID.generation = generation
++		// 新的 tsid 会写入 cache 中
+ 		s.storeTSIDToCaches(mr.MetricNameRaw, &genTSID, date)
+ 		newSeriesCount++
+ 
+@@ -2290,7 +2298,7 @@ func (s *Storage) add(rows []rawRow, dstMrs []*MetricRow, mrs []MetricRow, preci
+ 			logger.Infof("new series created: %s", mn.String())
+ 		}
+ 	}
+-
++	// 这里记录慢插入的行数
+ 	s.slowRowInserts.Add(slowInsertsCount)
+ 	s.newTimeseriesCreated.Add(newSeriesCount)
+ 	s.timeseriesRepopulated.Add(seriesRepopulated)
 diff --git a/lib/streamaggr/streamaggr.go b/lib/streamaggr/streamaggr.go
 index 458365487..b98e23a68 100644
 --- a/lib/streamaggr/streamaggr.go
@@ -1705,3 +1794,50 @@ index 3e64c4f5b..6c1853f50 100644
  	blocksRead := 0
  	for bi.NextBlock(&ctx.mb) {
  		blocksRead++
+diff --git a/lib/workingsetcache/cache.go b/lib/workingsetcache/cache.go
+index 55eadcbb5..30e60e370 100644
+--- a/lib/workingsetcache/cache.go
++++ b/lib/workingsetcache/cache.go
+@@ -45,7 +45,9 @@ type Cache struct {
+ 	MissEvictionBytes   atomic.Uint64
+ 	SizeEvictionBytes   atomic.Uint64
+ 
+-	getCalls       atomic.Uint64
++	// 这里是 cache 的 get 次数
++	getCalls atomic.Uint64
++	// 对 cache 的 set 进行计数
+ 	setCalls       atomic.Uint64
+ 	misses         atomic.Uint64
+ 	copiedFromPrev atomic.Uint64
+@@ -375,6 +377,7 @@ func (c *Cache) UpdateStats(fcs *fastcache.Stats) {
+ 	updateCacheStats(fcs, &cs)
+ 
+ 	fcs.GetCalls += c.getCalls.Load()
++	// 对 cache 的 set 进行计数
+ 	fcs.SetCalls += c.setCalls.Load()
+ 	fcs.Misses += c.misses.Load()
+ 	fcs.EntriesCount -= c.copiedFromPrev.Load()
+@@ -451,6 +454,7 @@ var tmpBufPool bytesutil.ByteBufferPool
+ 
+ // Set sets the given value for the given key.
+ func (c *Cache) Set(key, value []byte) {
++	// 对 cache 的 set 进行计数
+ 	c.setCalls.Add(1)
+ 	curr := c.curr.Load()
+ 	curr.Set(key, value)
+diff --git a/vendor/github.com/VictoriaMetrics/fastcache/fastcache.go b/vendor/github.com/VictoriaMetrics/fastcache/fastcache.go
+index 21832a46f..0438ae4eb 100644
+--- a/vendor/github.com/VictoriaMetrics/fastcache/fastcache.go
++++ b/vendor/github.com/VictoriaMetrics/fastcache/fastcache.go
+@@ -28,9 +28,11 @@ const maxBucketSize uint64 = 1 << bucketSizeBits
+ // Use Cache.UpdateStats for obtaining fresh stats from the cache.
+ type Stats struct {
+ 	// GetCalls is the number of Get calls.
++	// 这里是 cache 的 get 次数
+ 	GetCalls uint64
+ 
+ 	// SetCalls is the number of Set calls.
++	// 对 cache 的 set 进行计数
+ 	SetCalls uint64
+ 
+ 	// Misses is the number of cache misses.
