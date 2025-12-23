@@ -1,0 +1,19 @@
+diff --git a/.vscode/settings.json b/.vscode/settings.json
+index 6bda7582be..7ba00a7265 100644
+--- a/.vscode/settings.json
++++ b/.vscode/settings.json
+@@ -11,5 +11,13 @@
+     "MD025": {
+       "front_matter_title": ""
+     }
+-  }
++  },
++  "dotnet.server.useDecompilation": true,
++  "omnisharp.useModernNet": true,
++  "omnisharp.projectLoadTimeout": 120,
++  "omnisharp.dotNetCliPaths": [
++    "/Users/ahfu/code/github.com/ahfuzhang/code_comments/aspnetcore_v8.0.22/.dotnet"
++  ],
++  "dotnet.defaultSolution": "src/Servers/Kestrel/Kestrel.slnf",
++  "dotnet.dotnetPath": "/Users/ahfu/code/github.com/ahfuzhang/code_comments/aspnetcore_v8.0.22/.dotnet/dotnet"
+ }

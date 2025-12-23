@@ -1,0 +1,49 @@
+diff --git "a/\346\272\220\347\240\201\351\230\205\350\257\273.md" "b/\346\272\220\347\240\201\351\230\205\350\257\273.md"
+new file mode 100644
+index 0000000000..f698912756
+--- /dev/null
++++ "b/\346\272\220\347\240\201\351\230\205\350\257\273.md"
+@@ -0,0 +1,43 @@
++
++```csharp
++// src/Hosting/Server.Abstractions/src/IHttpApplication.cs
++public interface IHttpApplication<TContext> where TContext : notnull
++
++// src/Servers/Kestrel/Core/src/Internal/IRequestProcessor.cs
++internal interface IRequestProcessor
++{
++    Task ProcessRequestsAsync<TContext>(IHttpApplication<TContext> application) where TContext : notnull;
++}
++
++// src/Hosting/Server.Abstractions/src/IServer.cs
++public interface IServer : IDisposable
++{
++    /// <summary>
++    /// A collection of HTTP features of the server.
++    /// </summary>
++    IFeatureCollection Features { get; }
++
++    /// <summary>
++    /// Start the server with an application.
++    /// </summary>
++    /// <param name="application">An instance of <see cref="IHttpApplication{TContext}"/>.</param>
++    /// <typeparam name="TContext">The context associated with the application.</typeparam>
++    /// <param name="cancellationToken">Indicates if the server startup should be aborted.</param>
++    Task StartAsync<TContext>(IHttpApplication<TContext> application, CancellationToken cancellationToken) where TContext : notnull;
++
++    /// <summary>
++    /// Stop processing requests and shut down the server, gracefully if possible.
++    /// </summary>
++    /// <param name="cancellationToken">Indicates if the graceful shutdown should be aborted.</param>
++    Task StopAsync(CancellationToken cancellationToken);
++}
++
++// src/Http/Http.Abstractions/src/HttpContext.cs
++public abstract class HttpContext
++
++```
++
++```csharp
++// namespace System.Threading.Tasks
++public class Task : IAsyncResult, IDisposable
++```

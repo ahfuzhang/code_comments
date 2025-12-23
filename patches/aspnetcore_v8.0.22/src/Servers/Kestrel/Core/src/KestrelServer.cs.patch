@@ -1,0 +1,34 @@
+diff --git a/src/Servers/Kestrel/Core/src/KestrelServer.cs b/src/Servers/Kestrel/Core/src/KestrelServer.cs
+index 7f2909c77c..55ff123815 100644
+--- a/src/Servers/Kestrel/Core/src/KestrelServer.cs
++++ b/src/Servers/Kestrel/Core/src/KestrelServer.cs
+@@ -30,14 +30,16 @@ public class KestrelServer : IServer
+     /// <param name="loggerFactory">The <see cref="ILoggerFactory"/>.</param>
+     public KestrelServer(IOptions<KestrelServerOptions> options, IConnectionListenerFactory transportFactory, ILoggerFactory loggerFactory)
+     {
++        // 构造这个 inner 对象
++        // 其实这个 inner 完全可以是值类型的
+         _innerKestrelServer = new KestrelServerImpl(
+-            options,
+-            new[] { transportFactory ?? throw new ArgumentNullException(nameof(transportFactory)) },
++            options,  // 服务器选项
++            new[] { transportFactory ?? throw new ArgumentNullException(nameof(transportFactory)) },  // 猜测是 tcp listener 对象一类的东西
+             Array.Empty<IMultiplexedConnectionListenerFactory>(),
+-            new SimpleHttpsConfigurationService(),
+-            loggerFactory,
++            new SimpleHttpsConfigurationService(),  // http 的配置
++            loggerFactory,  // 日志对象
+             diagnosticSource: null,
+-            new KestrelMetrics(new DummyMeterFactory()));
++            new KestrelMetrics(new DummyMeterFactory()));  // metrics 相关的
+     }
+ 
+     /// <inheritdoc />
+@@ -49,6 +51,7 @@ public class KestrelServer : IServer
+     public KestrelServerOptions Options => _innerKestrelServer.Options;
+ 
+     /// <inheritdoc />
++    /// 猜测是 async 机制的入口函数
+     public Task StartAsync<TContext>(IHttpApplication<TContext> application, CancellationToken cancellationToken) where TContext : notnull
+     {
+         return _innerKestrelServer.StartAsync(application, cancellationToken);

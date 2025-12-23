@@ -1,0 +1,20 @@
+diff --git a/omnisharp.json b/omnisharp.json
+index 4c69db8efd..09f2dc331f 100644
+--- a/omnisharp.json
++++ b/omnisharp.json
+@@ -11,7 +11,7 @@
+     "RenameInStrings": true
+   },
+   "msbuild": {
+-    "MSBuildSDKsPath": ".\\.dotnet",
++    "MSBuildSDKsPath": "./.dotnet",
+     "EnablePackageAutoRestore": true,
+     "loadProjectsOnDemand": true
+   },
+@@ -24,4 +24,4 @@
+     ],
+     "excludeSearchPatterns": []
+   }
+-}
++}
+\ No newline at end of file

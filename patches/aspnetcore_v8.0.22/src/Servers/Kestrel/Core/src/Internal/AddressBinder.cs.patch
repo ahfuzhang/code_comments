@@ -1,0 +1,30 @@
+diff --git a/src/Servers/Kestrel/Core/src/Internal/AddressBinder.cs b/src/Servers/Kestrel/Core/src/Internal/AddressBinder.cs
+index 13ed5f68c0..22a6d90476 100644
+--- a/src/Servers/Kestrel/Core/src/Internal/AddressBinder.cs
++++ b/src/Servers/Kestrel/Core/src/Internal/AddressBinder.cs
+@@ -70,6 +70,7 @@ internal sealed class AddressBinder
+     /// <summary>
+     /// Returns an <see cref="IPEndPoint"/> for the given host an port.
+     /// If the host parameter isn't "localhost" or an IP address, use IPAddress.Any.
++    /// 解析 ip 地址
+     /// </summary>
+     internal static bool TryCreateIPEndPoint(BindingAddress address, [NotNullWhen(true)] out IPEndPoint? endpoint)
+     {
+@@ -97,6 +98,7 @@ internal sealed class AddressBinder
+         context.ServerOptions.OptionsInUse.Add(endpoint);
+     }
+ 
++    // 监听端口相关 options
+     internal static ListenOptions ParseAddress(string address, out bool https)
+     {
+         var parsedAddress = BindingAddress.Parse(address);
+@@ -236,7 +238,9 @@ internal sealed class AddressBinder
+         {
+             foreach (var address in _addresses)
+             {
++                // 解析了监听地址
+                 var options = ParseAddress(address, out var https);
++
+                 context.ServerOptions.ApplyEndpointDefaults(options);
+ 
+                 if (https && !options.IsTls)

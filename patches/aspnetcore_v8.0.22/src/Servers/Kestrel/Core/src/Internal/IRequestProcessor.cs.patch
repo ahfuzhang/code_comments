@@ -1,0 +1,12 @@
+diff --git a/src/Servers/Kestrel/Core/src/Internal/IRequestProcessor.cs b/src/Servers/Kestrel/Core/src/Internal/IRequestProcessor.cs
+index b1b5cfddbb..7d4f2a8c6a 100644
+--- a/src/Servers/Kestrel/Core/src/Internal/IRequestProcessor.cs
++++ b/src/Servers/Kestrel/Core/src/Internal/IRequestProcessor.cs
+@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Hosting.Server;
+ 
+ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal;
+ 
++// 用于 http 框架的重要的接口
+ internal interface IRequestProcessor
+ {
+     Task ProcessRequestsAsync<TContext>(IHttpApplication<TContext> application) where TContext : notnull;

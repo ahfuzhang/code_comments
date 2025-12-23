@@ -1,0 +1,51 @@
+diff --git a/src/Servers/Kestrel/Core/src/Internal/KestrelServerImpl.cs b/src/Servers/Kestrel/Core/src/Internal/KestrelServerImpl.cs
+index 5cb38d2832..18ba69473f 100644
+--- a/src/Servers/Kestrel/Core/src/Internal/KestrelServerImpl.cs
++++ b/src/Servers/Kestrel/Core/src/Internal/KestrelServerImpl.cs
+@@ -17,6 +17,7 @@ using Microsoft.Extensions.Primitives;
+ 
+ namespace Microsoft.AspNetCore.Server.Kestrel.Core;
+ 
++// 服务器实现的关键文件
+ internal sealed class KestrelServerImpl : IServer
+ {
+     private readonly ServerAddressesFeature _serverAddresses;
+@@ -119,6 +120,7 @@ internal sealed class KestrelServerImpl : IServer
+ 
+     private AddressBindContext? AddressBindContext { get; set; }
+ 
++    // async 机制的关键代码
+     public async Task StartAsync<TContext>(IHttpApplication<TContext> application, CancellationToken cancellationToken) where TContext : notnull
+     {
+         try
+@@ -134,6 +136,7 @@ internal sealed class KestrelServerImpl : IServer
+ 
+             ServiceContext.Heartbeat?.Start();
+ 
++            // 定义了一个异步函数
+             async Task OnBind(ListenOptions options, CancellationToken onBindCancellationToken)
+             {
+                 var hasHttp1 = options.Protocols.HasFlag(HttpProtocols.Http1);
+@@ -285,17 +288,22 @@ internal sealed class KestrelServerImpl : IServer
+         StopAsync(new CancellationToken(canceled: true)).GetAwaiter().GetResult();
+     }
+ 
++    // 猜测是用于端口绑定的函数
++    // 返回值是 Task ? 是什么意思
+     private async Task BindAsync(CancellationToken cancellationToken)
+     {
++        // 信号量是干什么用的 ???
+         await _bindSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+ 
+         try
+         {
++            // _stopping 是 graceful shutdown的标志位吗?
+             if (_stopping == 1)
+             {
+                 throw new InvalidOperationException("Kestrel has already been stopped.");
+             }
+ 
++            // 问号是对编译器告警的消除
+             IChangeToken? reloadToken = null;
+ 
+             _serverAddresses.InternalCollection.PreventPublicMutation();
