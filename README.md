@@ -22,3 +22,10 @@ make patch name=VictoriaLogs ver=v1.37.0
 ```bash
 make clone prj=dotnet name=aspnetcore ver=v8.0.22
 ```
+
+## github.com/cespare/xxhash
+
+```bash
+make clone prj=cespare name=xxhash ver=v2.3.0
+make diff name=xxhash ver=v2.3.0
+```

@@ -1,0 +1,161 @@
+diff --git a/xxhash_amd64.s b/xxhash_amd64.s
+index 3e8b132..a829d69 100644
+--- a/xxhash_amd64.s
++++ b/xxhash_amd64.s
+@@ -5,6 +5,7 @@
+ 
+ #include "textflag.h"
+ 
++// 使用宏定义重新命名寄存器
+ // Registers:
+ #define h      AX
+ #define d      AX
+@@ -19,6 +20,8 @@
+ #define prime1 R13
+ #define prime2 R14
+ #define prime4 DI
++// 还没有使用的寄存器 R15, CX
++// BP 帧指针，但是可以当成普通指针使用
+ 
+ #define round(acc, x) \
+ 	IMULQ prime2, x   \
+@@ -43,49 +46,67 @@
+ // blockLoop processes as many 32-byte blocks as possible,
+ // updating v1, v2, v3, and v4. It assumes that there is at least one block
+ // to process.
++// 处理与 32 字节对齐的部分
+ #define blockLoop() \
+ loop:  \
+-	MOVQ +0(p), x  \
++	MOVQ +0(p), x  \  // x(R12) = load_8_bytes(ptr)  // load 0-7
+ 	round(v1, x)   \
+-	MOVQ +8(p), x  \
++	MOVQ +8(p), x  \  // load 8-15
+ 	round(v2, x)   \
+-	MOVQ +16(p), x \
++	MOVQ +16(p), x \  // load 16-23
+ 	round(v3, x)   \
+-	MOVQ +24(p), x \
++	MOVQ +24(p), x \  // load 24-31
+ 	round(v4, x)   \
+-	ADDQ $32, p    \
++	ADDQ $32, p    \  // ptr += 32
+ 	CMPQ p, end    \
+-	JLE  loop
++	JLE  loop  // if ptr <= end then goto `loop`
++	// 因为这里有个等于的判断，因此数据正好与 32 字节对齐的时候，会多循环一次，然后把之前减去的 32 字节补回来
+ 
+ // func Sum64(b []byte) uint64
+ TEXT ·Sum64(SB), NOSPLIT|NOFRAME, $0-32
+ 	// Load fixed primes.
++	// prime1 = R13 = 全局变量 prime1
+ 	MOVQ ·primes+0(SB), prime1
++	// prime2 = R14 = length
+ 	MOVQ ·primes+8(SB), prime2
+ 	MOVQ ·primes+24(SB), prime4
+ 
+ 	// Load slice.
++	// p = SI = ptr
+ 	MOVQ b_base+0(FP), p
++	// n = DX = length
+ 	MOVQ b_len+8(FP), n
++	// end = BX = 数组结束位置
+ 	LEAQ (p)(n*1), end
+ 
+ 	// The first loop limit will be len(b)-32.
++	// end = BX = end - 32
++	// ??? 感觉不严谨，如果数据正好与 32 字节对齐怎么办?
+ 	SUBQ $32, end
+ 
+ 	// Check whether we have at least one block.
+ 	CMPQ n, $32
++	// if length < 32 then goto noBlocks
+ 	JLT  noBlocks
+ 
+ 	// Set up initial state (v1, v2, v3, v4).
++	// 处理 n 大于 32 字节的情况
++	// v1 = R8 = 全局变量 prime1
+ 	MOVQ prime1, v1
++	// v1 += prime2
+ 	ADDQ prime2, v1
++	// v2 = prime2
+ 	MOVQ prime2, v2
++	// v3 = 0
+ 	XORQ v3, v3
++	// v4 = 0
+ 	XORQ v4, v4
++	// v4 -= prime1
+ 	SUBQ prime1, v4
+ 
++	// 处理与 32 字节对齐的部分
+ 	blockLoop()
+-
++	
+ 	MOVQ v1, h
+ 	ROLQ $1, h
+ 	MOVQ v2, x
+@@ -106,17 +127,23 @@ TEXT ·Sum64(SB), NOSPLIT|NOFRAME, $0-32
+ 	JMP afterBlocks
+ 
+ noBlocks:
++	// h = 全局变量 prime5
+ 	MOVQ ·primes+32(SB), h
+ 
+ afterBlocks:
++	// 处理不足 32 字节的部分
++	// h += length
+ 	ADDQ n, h
+-
++	// end += 24  // 猜测是处理 3 个 8 字节的情况
+ 	ADDQ $24, end
+ 	CMPQ p, end
++	// if p>end then goto try4  // 已经处理到距离上次处理的 24 字节以上，说明剩余的字节一定不足 24 字节了
+ 	JG   try4
+ 
+ loop8:
++	// load 8 bytes
+ 	MOVQ  (p), x
++	// ptr += 8
+ 	ADDQ  $8, p
+ 	round0(x)
+ 	XORQ  x, h
+@@ -125,14 +152,19 @@ loop8:
+ 	ADDQ  prime4, h
+ 
+ 	CMPQ p, end
++	// if p<=end then goto `loop8`
+ 	JLE  loop8
+ 
+ try4:
++	// 处理少于 8 字节的情况, 按 4 字节对齐
+ 	ADDQ $4, end
+ 	CMPQ p, end
++	// if p>end then goto `try1`
+ 	JG   try1
+ 
++	// load 4 bytes
+ 	MOVL  (p), x
++	// ptr += 4
+ 	ADDQ  $4, p
+ 	IMULQ prime1, x
+ 	XORQ  x, h
+@@ -144,9 +176,11 @@ try4:
+ try1:
+ 	ADDQ $4, end
+ 	CMPQ p, end
++	if p >= end then goto `finalize`
+ 	JGE  finalize
+ 
+ loop1:
++	// 少于 4 字节的情况
+ 	MOVBQZX (p), x
+ 	ADDQ    $1, p
+ 	IMULQ   ·primes+32(SB), x
+@@ -155,6 +189,7 @@ loop1:
+ 	IMULQ   prime1, h
+ 
+ 	CMPQ p, end
++	if p<end then goto `loop1`
+ 	JL   loop1
+ 
+ finalize:

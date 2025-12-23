@@ -1,0 +1,13 @@
+diff --git a/xxhash_asm.go b/xxhash_asm.go
+index 78f95f2..ea66c8e 100644
+--- a/xxhash_asm.go
++++ b/xxhash_asm.go
+@@ -13,3 +13,8 @@ func Sum64(b []byte) uint64
+ 
+ //go:noescape
+ func writeBlocks(d *Digest, b []byte) int
++
++// BatchSum64
++//
++//go:noescape
++func BatchSum64String(src []string, dst []uint64) uint64
