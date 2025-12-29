@@ -1,0 +1,24 @@
+diff --git a/examples/helloworld/helloworld/helloworld_grpc.pb.go b/examples/helloworld/helloworld/helloworld_grpc.pb.go
+index be396a90..49da635d 100644
+--- a/examples/helloworld/helloworld/helloworld_grpc.pb.go
++++ b/examples/helloworld/helloworld/helloworld_grpc.pb.go
+@@ -22,6 +22,7 @@ package helloworld
+ 
+ import (
+ 	context "context"
++
+ 	grpc "google.golang.org/grpc"
+ 	codes "google.golang.org/grpc/codes"
+ 	status "google.golang.org/grpc/status"
+@@ -111,9 +112,11 @@ func _Greeter_SayHello_Handler(srv interface{}, ctx context.Context, dec func(in
+ 	if err := dec(in); err != nil {
+ 		return nil, err
+ 	}
++	// interceptor 拦截器
+ 	if interceptor == nil {
+ 		return srv.(GreeterServer).SayHello(ctx, in)
+ 	}
++	// Unary 一元的
+ 	info := &grpc.UnaryServerInfo{
+ 		Server:     srv,
+ 		FullMethod: Greeter_SayHello_FullMethodName,

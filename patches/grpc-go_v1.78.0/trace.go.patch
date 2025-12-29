@@ -1,0 +1,12 @@
+diff --git a/trace.go b/trace.go
+index 10f4f798..4dc5c91c 100644
+--- a/trace.go
++++ b/trace.go
+@@ -30,6 +30,7 @@ import (
+ 
+ // EnableTracing controls whether to trace RPCs using the golang.org/x/net/trace package.
+ // This should only be set before any RPCs are sent or received by this program.
++// 这个标记是怎么进行开关的呢?
+ var EnableTracing bool
+ 
+ // methodFamily returns the trace family for the given method.

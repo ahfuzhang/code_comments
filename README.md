@@ -41,5 +41,18 @@ make diff name=grpc-dotnet ver=v2.71.0
   - brew install --cask dotnet-sdk@9
 * 列出安装的 sdk
   - dotnet --list-sdks
-  
-    
+
+## https://github.com/grpc/grpc-go
+
+```bash
+make clone prj=grpc name=grpc-go ver=v1.78.0
+make diff name=grpc-go ver=v1.78.0
+```
+
+## https://github.com/golang/go
+
+```bash
+make clone prj=golang name=go ver=go1.25.5
+make diff name=go ver=go1.25.5
+```
+

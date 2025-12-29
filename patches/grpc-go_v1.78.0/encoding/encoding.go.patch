@@ -1,0 +1,12 @@
+diff --git a/encoding/encoding.go b/encoding/encoding.go
+index dadd21e4..d355d785 100644
+--- a/encoding/encoding.go
++++ b/encoding/encoding.go
+@@ -97,6 +97,7 @@ func RegisterCompressor(c Compressor) {
+ 
+ // GetCompressor returns Compressor for the given compressor name.
+ func GetCompressor(name string) Compressor {
++	// registeredCompressor 各种压缩算法的压缩器，到底是从哪里注册进去的呢 ???
+ 	return registeredCompressor[name]
+ }
+ 

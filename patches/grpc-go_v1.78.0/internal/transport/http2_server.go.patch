@@ -1,0 +1,57 @@
+diff --git a/internal/transport/http2_server.go b/internal/transport/http2_server.go
+index 6f78a6b0..7a3e8261 100644
+--- a/internal/transport/http2_server.go
++++ b/internal/transport/http2_server.go
+@@ -366,6 +366,7 @@ func NewServerTransport(conn net.Conn, config *ServerConfig) (_ ServerTransport,
+ 
+ // operateHeaders takes action on the decoded headers. Returns an error if fatal
+ // error encountered and transport needs to close, otherwise returns nil.
++// handle 是解析到 frame 后的回调函数
+ func (t *http2Server) operateHeaders(ctx context.Context, frame *http2.MetaHeadersFrame, handle func(*ServerStream)) error {
+ 	// Acquire max stream ID lock for entire duration
+ 	t.maxStreamMu.Lock()
+@@ -390,7 +391,7 @@ func (t *http2Server) operateHeaders(ctx context.Context, frame *http2.MetaHeade
+ 		return fmt.Errorf("received an illegal stream id: %v. headers frame: %+v", streamID, frame)
+ 	}
+ 	t.maxStreamID = streamID
+-
++	// 这个 ServerStream 代表了一个解析出来了 frame
+ 	s := &ServerStream{
+ 		Stream: Stream{
+ 			id: streamID,
+@@ -417,9 +418,11 @@ func (t *http2Server) operateHeaders(ctx context.Context, frame *http2.MetaHeade
+ 	for _, hf := range frame.Fields {
+ 		switch hf.Name {
+ 		case "content-type":
++			// content-type 只能是 application/grpc
+ 			contentSubtype, validContentType := grpcutil.ContentSubtype(hf.Value)
+ 			if !validContentType {
+ 				contentType = hf.Value
++				// ??? 看不懂，为什么这里要 break 这个循环
+ 				break
+ 			}
+ 			mdata[hf.Name] = append(mdata[hf.Name], hf.Value)
+@@ -499,6 +502,7 @@ func (t *http2Server) operateHeaders(ctx context.Context, frame *http2.MetaHeade
+ 		return nil
+ 	}
+ 	if !isGRPC {
++		// 不是 grpc 的时候，返回一个 http status code 415
+ 		t.controlBuf.put(&earlyAbortStream{
+ 			httpStatus:     http.StatusUnsupportedMediaType,
+ 			streamID:       streamID,
+@@ -656,6 +660,7 @@ func (t *http2Server) operateHeaders(ctx context.Context, frame *http2.MetaHeade
+ 		streamID: s.id,
+ 		wq:       &s.wq,
+ 	})
++	// ServerStream 解析好以后，传给 handle 回调函数
+ 	handle(s)
+ 	return nil
+ }
+@@ -663,6 +668,7 @@ func (t *http2Server) operateHeaders(ctx context.Context, frame *http2.MetaHeade
+ // HandleStreams receives incoming streams using the given handler. This is
+ // typically run in a separate goroutine.
+ // traceCtx attaches trace to ctx and returns the new context.
++// handle 是解析到 frame 后的回调函数
+ func (t *http2Server) HandleStreams(ctx context.Context, handle func(*ServerStream)) {
+ 	defer func() {
+ 		close(t.readerDone)

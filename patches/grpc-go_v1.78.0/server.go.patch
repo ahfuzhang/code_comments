@@ -1,0 +1,252 @@
+diff --git a/server.go b/server.go
+index ddd37734..91b6f219 100644
+--- a/server.go
++++ b/server.go
+@@ -684,6 +684,7 @@ func (s *Server) initServerWorkers() {
+ 
+ // NewServer creates a gRPC server which has no service registered and has not
+ // started to accept requests yet.
++// 构造一个 grpc server 对象
+ func NewServer(opt ...ServerOption) *Server {
+ 	opts := defaultServerOptions
+ 	for _, o := range globalServerOptions {
+@@ -693,20 +694,20 @@ func NewServer(opt ...ServerOption) *Server {
+ 		o.apply(&opts)
+ 	}
+ 	s := &Server{
+-		lis:          make(map[net.Listener]bool),
++		lis:          make(map[net.Listener]bool), // 当前的监听器，看来是支持多个监听端口
+ 		opts:         opts,
+ 		statsHandler: istats.NewCombinedHandler(opts.statsHandlers...),
+-		conns:        make(map[string]map[transport.ServerTransport]bool),
+-		services:     make(map[string]*serviceInfo),
++		conns:        make(map[string]map[transport.ServerTransport]bool), // 当前的客户端连接
++		services:     make(map[string]*serviceInfo),                       // 当前的服务
+ 		quit:         grpcsync.NewEvent(),
+ 		done:         grpcsync.NewEvent(),
+ 		channelz:     channelz.RegisterServer(""),
+ 	}
+-	chainUnaryServerInterceptors(s)
+-	chainStreamServerInterceptors(s)
++	chainUnaryServerInterceptors(s)  //???
++	chainStreamServerInterceptors(s) //???
+ 	s.cv = sync.NewCond(&s.mu)
+ 	if EnableTracing {
+-		_, file, line, _ := runtime.Caller(1)
++		_, file, line, _ := runtime.Caller(1) // 取得当前的代码行
+ 		s.events = newTraceEventLog("grpc.Server", fmt.Sprintf("%s:%d", file, line))
+ 	}
+ 
+@@ -722,6 +723,7 @@ func NewServer(opt ...ServerOption) *Server {
+ // REQUIRES s.mu is held.
+ func (s *Server) printf(format string, a ...any) {
+ 	if s.events != nil {
++		// 打印 trace
+ 		s.events.Printf(format, a...)
+ 	}
+ }
+@@ -868,6 +870,9 @@ func (l *listenSocket) Close() error {
+ //     library not enabling TCP keepalives by default.
+ //   - override the Accept method on the passed in net.Listener and set the
+ //     SO_KEEPALIVE socket option to enable TCP keepalives, with OS defaults.
++//
++// 开始提供 grpc 服务了
++// todo: 一定要传 tcp Listener 吗？ 难道就不能 同时再支持 http 1.1 和 http 2
+ func (s *Server) Serve(lis net.Listener) error {
+ 	s.mu.Lock()
+ 	s.printf("serving")
+@@ -898,7 +903,7 @@ func (s *Server) Serve(lis net.Listener) error {
+ 			SocketOptions: channelz.GetSocketOption(lis)},
+ 		),
+ 	}
+-	s.lis[ls] = true
++	s.lis[ls] = true // 注册 server socket
+ 
+ 	defer func() {
+ 		s.mu.Lock()
+@@ -914,6 +919,7 @@ func (s *Server) Serve(lis net.Listener) error {
+ 
+ 	var tempDelay time.Duration // how long to sleep on accept failure
+ 	for {
++		// 接入新的连接
+ 		rawConn, err := lis.Accept()
+ 		if err != nil {
+ 			if ne, ok := err.(interface {
+@@ -956,6 +962,7 @@ func (s *Server) Serve(lis net.Listener) error {
+ 		// s.conns before this conn can be added.
+ 		s.serveWG.Add(1)
+ 		go func() {
++			// 每个连接开一个协程
+ 			s.handleRawConn(lis.Addr().String(), rawConn)
+ 			s.serveWG.Done()
+ 		}()
+@@ -964,29 +971,41 @@ func (s *Server) Serve(lis net.Listener) error {
+ 
+ // handleRawConn forks a goroutine to handle a just-accepted connection that
+ // has not had any I/O performed on it yet.
++// 处理连接的协程
+ func (s *Server) handleRawConn(lisAddr string, rawConn net.Conn) {
+ 	if s.quit.HasFired() {
+ 		rawConn.Close()
+ 		return
+ 	}
++	// recv 的超时时间
+ 	rawConn.SetDeadline(time.Now().Add(s.opts.connectionTimeout))
+ 
+-	// Finish handshaking (HTTP2)
++	// Finish handshaking (HTTP2)  // 完成 http2 的握手
++	// st 对象猜测是用于协议解析的
+ 	st := s.newHTTP2Transport(rawConn)
++	// 不再设置 recv 超时时间
+ 	rawConn.SetDeadline(time.Time{})
+ 	if st == nil {
+ 		return
+ 	}
+-
++	// 看不懂
++	/*
++		type Foo interface {
++			PassServerTransport(transport.ServerTransport)
++		}
++		cc, ok := rawConn.(Foo)
++	*/
+ 	if cc, ok := rawConn.(interface {
+ 		PassServerTransport(transport.ServerTransport)
+ 	}); ok {
++		// 如果有这个方法，那么就调用这个方法
+ 		cc.PassServerTransport(st)
+ 	}
+-
++	// 所有客户端的连接，都要登记， key 是 lisAddr, 也就是客户端的 ip:port
+ 	if !s.addConn(lisAddr, st) {
+ 		return
+ 	}
++	// ??? 看不懂，这里为什么要 go 出来
+ 	go func() {
+ 		s.serveStreams(context.Background(), st, rawConn)
+ 		s.removeConn(lisAddr, st)
+@@ -1015,6 +1034,7 @@ func (s *Server) newHTTP2Transport(c net.Conn) transport.ServerTransport {
+ 		BufferPool:            s.opts.bufferPool,
+ 		StaticWindowSize:      s.opts.staticWindowSize,
+ 	}
++	// st 是 http2Server 类型的实例
+ 	st, err := transport.NewServerTransport(c, config)
+ 	if err != nil {
+ 		s.mu.Lock()
+@@ -1035,10 +1055,14 @@ func (s *Server) newHTTP2Transport(c net.Conn) transport.ServerTransport {
+ 	return st
+ }
+ 
++// 独立的协程中，处理一个 tcp connection 上的数据
+ func (s *Server) serveStreams(ctx context.Context, st transport.ServerTransport, rawConn net.Conn) {
++	// 把连接对象，加到 context 中去
+ 	ctx = transport.SetConnection(ctx, rawConn)
++	// ??? peer 对象看起来没啥用
+ 	ctx = peer.NewContext(ctx, st.Peer())
+ 	if s.statsHandler != nil {
++		// 这个 stats 的对象用来干啥的??? 是 metrics 吗?
+ 		ctx = s.statsHandler.TagConn(ctx, &stats.ConnTagInfo{
+ 			RemoteAddr: st.Peer().Addr,
+ 			LocalAddr:  st.Peer().LocalAddr,
+@@ -1054,6 +1078,8 @@ func (s *Server) serveStreams(ctx context.Context, st transport.ServerTransport,
+ 	}()
+ 
+ 	streamQuota := newHandlerQuota(s.opts.maxConcurrentStreams)
++	// see: internal/transport/http2_server.go func (t *http2Server) HandleStreams
++	// HandleStreams 会阻塞，从 tcp 中解析出 frame
+ 	st.HandleStreams(ctx, func(stream *transport.ServerStream) {
+ 		s.handlersWG.Add(1)
+ 		streamQuota.acquire()
+@@ -1071,6 +1097,7 @@ func (s *Server) serveStreams(ctx context.Context, st transport.ServerTransport,
+ 				// If all stream workers are busy, fallback to the default code path.
+ 			}
+ 		}
++		// 每个解析出来了 stream，都在一个独立的协程中去处理
+ 		go f()
+ 	})
+ }
+@@ -1126,6 +1153,7 @@ func (s *Server) addConn(addr string, st transport.ServerTransport) bool {
+ 		st.Close(errors.New("Server.addConn called when server has already been stopped"))
+ 		return false
+ 	}
++	// drain 喝光，喝干
+ 	if s.drain {
+ 		// Transport added after we drained our existing conns: drain it
+ 		// immediately.
+@@ -1134,6 +1162,9 @@ func (s *Server) addConn(addr string, st transport.ServerTransport) bool {
+ 
+ 	if s.conns[addr] == nil {
+ 		// Create a map entry if this is the first connection on this listener.
++		// key 是客户端的 ip:port
++		// value 为什么是个 map ???
++		// 难道一个 tcp 连接上，有多个协议解析器 ???
+ 		s.conns[addr] = make(map[transport.ServerTransport]bool)
+ 	}
+ 	s.conns[addr][st] = true
+@@ -1242,6 +1273,8 @@ func getChainUnaryHandler(interceptors []UnaryServerInterceptor, curr int, info
+ 	}
+ }
+ 
++// @param info *serviceInfo, 服务的信息
++// @param md *MethodDesc 方法的信息
+ func (s *Server) processUnaryRPC(ctx context.Context, stream *transport.ServerStream, info *serviceInfo, md *MethodDesc, trInfo *traceInfo) (err error) {
+ 	sh := s.statsHandler
+ 	if sh != nil || trInfo != nil || channelz.IsOn() {
+@@ -1425,6 +1458,7 @@ func (s *Server) processUnaryRPC(ctx context.Context, stream *transport.ServerSt
+ 		return nil
+ 	}
+ 	ctx = NewContextWithServerTransportStream(ctx, stream)
++	// 调用 pb 生成的服务的 method 的代码
+ 	reply, appErr := md.Handler(info.serviceImpl, ctx, df, s.opts.unaryInt)
+ 	if appErr != nil {
+ 		appStatus, ok := status.FromError(appErr)
+@@ -1472,6 +1506,8 @@ func (s *Server) processUnaryRPC(ctx context.Context, stream *transport.ServerSt
+ 	if stream.SendCompress() != sendCompressorName {
+ 		comp = encoding.GetCompressor(stream.SendCompress())
+ 	}
++	// reply 是回包的对象
++	// 发送响应到客户端
+ 	if err := s.sendResponse(ctx, stream, reply, cp, opts, comp); err != nil {
+ 		if err == io.EOF {
+ 			// The entire stream is done (for unary RPC only).
+@@ -1764,6 +1800,8 @@ func (s *Server) processStreamingRPC(ctx context.Context, stream *transport.Serv
+ 	return ss.s.WriteStatus(statusOK)
+ }
+ 
++// 从 tcp 连接中，解析出来了一个 frame.
++// 在一个独立的协程中，处理这个 frame
+ func (s *Server) handleStream(t transport.ServerTransport, stream *transport.ServerStream) {
+ 	ctx := stream.Context()
+ 	ctx = contextWithServer(ctx, s)
+@@ -1782,7 +1820,7 @@ func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Ser
+ 			ti.firstLine.deadline = time.Until(dl)
+ 		}
+ 	}
+-
++	// http2 中，请求的路径
+ 	sm := stream.Method()
+ 	if sm != "" && sm[0] == '/' {
+ 		sm = sm[1:]
+@@ -1806,8 +1844,8 @@ func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Ser
+ 		}
+ 		return
+ 	}
+-	service := sm[:pos]
+-	method := sm[pos+1:]
++	service := sm[:pos]  // 从请求路径中，得到服务的名字
++	method := sm[pos+1:] // 从请求路径中，得到 method 的名字
+ 
+ 	// FromIncomingContext is expensive: skip if there are no statsHandlers
+ 	if s.statsHandler != nil {
+@@ -1825,9 +1863,10 @@ func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Ser
+ 	// To have calls in stream callouts work. Will delete once all stats handler
+ 	// calls come from the gRPC layer.
+ 	stream.SetContext(ctx)
+-
++	// todo: 这里可以模仿 fasthttp，直接把路径写死在 switch / case 上面
+ 	srv, knownService := s.services[service]
+ 	if knownService {
++		// 如果是一个已经存在的 service
+ 		if md, ok := srv.methods[method]; ok {
+ 			s.processUnaryRPC(ctx, stream, srv, md, ti)
+ 			return
