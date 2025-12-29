@@ -1,0 +1,12 @@
+diff --git a/perf/benchmarkapps/GrpcAspNetCoreServer/Startup.cs b/perf/benchmarkapps/GrpcAspNetCoreServer/Startup.cs
+index cb9ba210..faa895e2 100644
+--- a/perf/benchmarkapps/GrpcAspNetCoreServer/Startup.cs
++++ b/perf/benchmarkapps/GrpcAspNetCoreServer/Startup.cs
+@@ -47,6 +47,7 @@ public class Startup
+             // Small performance benefit to skip checking for security metadata on endpoint
+             c.SuppressCheckForUnhandledSecurityMetadata = true;
+         });
++        // 看起来是加了一个具体的实现类
+         services.AddSingleton<BenchmarkServiceImpl>();
+         services.AddControllers();
+ 

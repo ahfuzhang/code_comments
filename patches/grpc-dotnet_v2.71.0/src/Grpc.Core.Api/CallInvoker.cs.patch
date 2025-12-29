@@ -1,0 +1,13 @@
+diff --git a/src/Grpc.Core.Api/CallInvoker.cs b/src/Grpc.Core.Api/CallInvoker.cs
+index c93b196f..f59331ca 100644
+--- a/src/Grpc.Core.Api/CallInvoker.cs
++++ b/src/Grpc.Core.Api/CallInvoker.cs
+@@ -16,8 +16,6 @@
+ 
+ #endregion
+ 
+-using System.Threading.Tasks;
+-
+ namespace Grpc.Core;
+ 
+ /// <summary>

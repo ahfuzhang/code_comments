@@ -1,0 +1,121 @@
+diff --git a/perf/benchmarkapps/GrpcAspNetCoreServer/Program.cs b/perf/benchmarkapps/GrpcAspNetCoreServer/Program.cs
+index f729a660..35a36688 100644
+--- a/perf/benchmarkapps/GrpcAspNetCoreServer/Program.cs
++++ b/perf/benchmarkapps/GrpcAspNetCoreServer/Program.cs
+@@ -32,12 +32,15 @@ public class Program
+         CreateHostBuilder(args).Build().Run();
+     }
+ 
++    // 返回 Microsoft.Extensions.Hosting.HostBuilder
++    //   里面包含了监听的端口，需要的协议，日志等
+     [UnconditionalSuppressMessage("AotAnalysis", "IL3050:RequiresDynamicCode",
+         Justification = "DependencyInjection only used with safe types.")]
+     public static IHostBuilder CreateHostBuilder(string[] args)
+     {
+         var runtimeVersion = typeof(object).GetTypeInfo().Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "Unknown";
+         var isServerGC = GCSettings.IsServerGC;
++        // 这个处理器的个数，用在哪里的?
+         var processorCount = Environment.ProcessorCount;
+ 
+         Console.WriteLine();
+@@ -49,28 +52,42 @@ public class Program
+         Console.WriteLine($"NetCoreAppVersion: {runtimeVersion}");
+         Console.WriteLine($"{nameof(GCSettings.IsServerGC)}: {isServerGC}");
+         Console.WriteLine($"{nameof(Environment.ProcessorCount)}: {processorCount}");
+-
++        // 构造一个 config 对象?
+         var config = new ConfigurationBuilder()
+             .AddJsonFile("hosting.json", optional: true)
+             .AddEnvironmentVariables(prefix: "ASPNETCORE_")
+             .AddCommandLine(args)
+             .Build();
+-
++        // Microsoft.Extensions.Hosting.Host
++        /*
++        Microsoft.Extensions.Hosting.Host 是 .NET 通用主机（Generic Host） 的核心入口类，
++          它为控制台应用、后台服务、Worker、ASP.NET Core 等提供了一套统一的启动、生命周期、依赖注入、
++          配置与日志基础设施。
++        */
++        Microsoft.Extensions.Hosting.HostBuilder? builder = null;
++        // IHostBuilder IHostBuilder.ConfigureWebHostDefaults(Action<IWebHostBuilder> configure)
++        // Action<IWebHostBuilder> 是一个委托。(函数指针)
+         var hostBuilder = Host.CreateDefaultBuilder(args)
+             .ConfigureWebHostDefaults(webBuilder =>
+             {
+-                webBuilder.UseContentRoot(Directory.GetCurrentDirectory());
+-                webBuilder.UseConfiguration(config);
++                // 由一个函数来完成初始化
++                // ??? webBuilder 来自哪里?
++                webBuilder.UseContentRoot(Directory.GetCurrentDirectory());  // 当前目录
++                webBuilder.UseConfiguration(config);  // 服务的配置对象
++                // Startup 是一个类
+                 webBuilder.UseStartup<Startup>();
+-
++                // 下面配置 Kestrel 服务器
+                 webBuilder.ConfigureKestrel((context, options) =>
+                 {
++                    // -server.urls=http://localhost:5000， 指定监听的端口
+                     var endPoint = config.CreateIPEndPoint();
++                    // -udsFileName=unix_domain_service
+                     var udsFileName = config["udsFileName"];
+                     var namedPipeName = config["namedPipeName"];
+ 
+                     if (!string.IsNullOrEmpty(udsFileName))
+                     {
++                        // 使用域套接字的情况
+                         var socketPath = ResolveUdsPath(udsFileName);
+                         if (File.Exists(socketPath))
+                         {
+@@ -86,6 +103,7 @@ public class Program
+                     }
+                     else if (!string.IsNullOrEmpty(namedPipeName))
+                     {
++                        // 使用命名管道的情况
+                         Console.WriteLine($"Named pipe name: {namedPipeName}");
+                         options.ListenNamedPipe(namedPipeName, listenOptions =>
+                         {
+@@ -94,11 +112,15 @@ public class Program
+                     }
+                     else
+                     {
++                        // 监听 tcp 端口
++                        // ？？？ 1 监听后的 server fd 在哪里?
++                        // ??? 监听失败，如何抛出异常
+                         // ListenAnyIP will work with IPv4 and IPv6.
+                         // Chosen over Listen+IPAddress.Loopback, which would have a 2 second delay when
+                         // creating a connection on a local Windows machine.
+                         options.ListenAnyIP(endPoint.Port, listenOptions =>
+                         {
++                            // 通过命令行参数，识别支持的协议的类型
+                             ConfigureListenOptions(listenOptions, config, endPoint);
+                         });
+                     }
+@@ -114,8 +136,9 @@ public class Program
+             })
+             .ConfigureLogging(loggerFactory =>
+             {
++                // 配置日志的输出
+                 loggerFactory.ClearProviders();
+-
++                // 命令行参数 -LogLevel 来指定日志级别
+                 if (Enum.TryParse<LogLevel>(config["LogLevel"], out var logLevel) && logLevel != LogLevel.None)
+                 {
+                     Console.WriteLine($"Console Logging enabled with level '{logLevel}'");
+@@ -134,6 +157,8 @@ public class Program
+ 
+     private static string ResolveUdsPath(string udsFileName) => Path.Combine(Path.GetTempPath(), udsFileName);
+ 
++    // 太复杂了，监听个端口搞那么多类
++    // -protocol=h2 这样就会同时处理 http1 和 http2
+     private static void ConfigureListenOptions(ListenOptions listenOptions, IConfigurationRoot config, System.Net.IPEndPoint endPoint)
+     {
+         var basePath = Path.GetDirectoryName(AppContext.BaseDirectory);
+@@ -148,7 +173,7 @@ public class Program
+         if (protocol.Equals("h2", StringComparison.OrdinalIgnoreCase))
+         {
+             listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
+-
++            // ???? 1111 是个啥意思啊
+             listenOptions.UseHttps(certPath, "1111", httpsOptions =>
+             {
+                 if (enableCertAuth)

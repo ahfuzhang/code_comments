@@ -1,0 +1,14 @@
+diff --git a/src/Grpc.AspNetCore.Server/GrpcEndpointRouteBuilderExtensions.cs b/src/Grpc.AspNetCore.Server/GrpcEndpointRouteBuilderExtensions.cs
+index f583a2c4..a70c5cbc 100644
+--- a/src/Grpc.AspNetCore.Server/GrpcEndpointRouteBuilderExtensions.cs
++++ b/src/Grpc.AspNetCore.Server/GrpcEndpointRouteBuilderExtensions.cs
+@@ -36,6 +36,9 @@ public static class GrpcEndpointRouteBuilderExtensions
+     /// <typeparam name="TService">The service type to map requests to.</typeparam>
+     /// <param name="builder">The <see cref="IEndpointRouteBuilder"/> to add the route to.</param>
+     /// <returns>A <see cref="GrpcServiceEndpointConventionBuilder"/> for endpoints associated with the service.</returns>
++    /// 看起来这里是 server 的入口
++    /// this IEndpointRouteBuilder builder 这一行看不懂
++    /// TService 是 protobuf 生成的一个类
+     public static GrpcServiceEndpointConventionBuilder MapGrpcService<[DynamicallyAccessedMembers(GrpcProtocolConstants.ServiceAccessibility)] TService>(this IEndpointRouteBuilder builder) where TService : class
+     {
+         ArgumentNullThrowHelper.ThrowIfNull(builder);

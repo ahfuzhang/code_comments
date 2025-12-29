@@ -1,0 +1,14 @@
+diff --git a/perf/benchmarkapps/GrpcCoreServer/Program.cs b/perf/benchmarkapps/GrpcCoreServer/Program.cs
+index 3d95807b..70f7c2df 100644
+--- a/perf/benchmarkapps/GrpcCoreServer/Program.cs
++++ b/perf/benchmarkapps/GrpcCoreServer/Program.cs
+@@ -58,7 +58,8 @@ class Program
+         var address = config.CreateBindingAddress();
+ 
+         Console.WriteLine($"Starting C-core server listening on {address.Host}:{address.Port}");
+-
++        // https://github.com/grpc/grpc/blob/v1.46.x/src/csharp/Grpc.Core/Server.cs
++        // 为什么 Server 的代码要放另一个包
+         Server server = new Server
+         {
+             Services =

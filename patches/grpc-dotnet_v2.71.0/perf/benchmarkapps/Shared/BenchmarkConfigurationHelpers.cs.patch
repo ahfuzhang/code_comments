@@ -1,0 +1,12 @@
+diff --git a/perf/benchmarkapps/Shared/BenchmarkConfigurationHelpers.cs b/perf/benchmarkapps/Shared/BenchmarkConfigurationHelpers.cs
+index c7165c8f..8fd9d9d9 100644
+--- a/perf/benchmarkapps/Shared/BenchmarkConfigurationHelpers.cs
++++ b/perf/benchmarkapps/Shared/BenchmarkConfigurationHelpers.cs
+@@ -24,6 +24,7 @@ namespace Common;
+ 
+ public static class BenchmarkConfigurationHelpers
+ {
++    // 命令行参数 -server.urls=http://localhost:5000
+     public static BindingAddress CreateBindingAddress(this IConfiguration config)
+     {
+         var url = config["server.urls"] ?? config["urls"];

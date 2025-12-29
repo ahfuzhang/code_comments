@@ -29,3 +29,17 @@ make clone prj=dotnet name=aspnetcore ver=v8.0.22
 make clone prj=cespare name=xxhash ver=v2.3.0
 make diff name=xxhash ver=v2.3.0
 ```
+
+## github.com/grpc/grpc-dotnet
+
+```bash
+make clone prj=grpc name=grpc-dotnet ver=v2.71.0
+make diff name=grpc-dotnet ver=v2.71.0
+```
+
+* 安装 sdk
+  - brew install --cask dotnet-sdk@9
+* 列出安装的 sdk
+  - dotnet --list-sdks
+  
+    
