@@ -3,3 +3,6 @@
 /grpc-dotnet*
 /go_*
 /grpc-go*
+/metrics_*
+/opentelemetry-dotnet_*
+/FASTER_v2.6.5/

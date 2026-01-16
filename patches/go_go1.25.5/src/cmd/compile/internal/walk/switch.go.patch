@@ -1,0 +1,20 @@
+diff --git a/src/cmd/compile/internal/walk/switch.go b/src/cmd/compile/internal/walk/switch.go
+index cbe38b54bc..de12d09664 100644
+--- a/src/cmd/compile/internal/walk/switch.go
++++ b/src/cmd/compile/internal/walk/switch.go
+@@ -792,6 +792,7 @@ func (s *typeSwitch) tryJumpTable(cc []typeClause, out *ir.Nodes) bool {
+ 			// selecting b bits starting at bit i.
+ 			hashes = hashes[:0]
+ 			for _, c := range cc {
++				// 这里是 perfect hash 的计算过程
+ 				h := c.hash >> i & (1<<b - 1)
+ 				hashes = append(hashes, h)
+ 			}
+@@ -799,6 +800,7 @@ func (s *typeSwitch) tryJumpTable(cc []typeClause, out *ir.Nodes) bool {
+ 			slices.Sort(hashes)
+ 			for j := 1; j < len(hashes); j++ {
+ 				if hashes[j] == hashes[j-1] {
++					// 发生了 hash 冲突
+ 					// There is a duplicate hash; try a different b/i pair.
+ 					continue pickI
+ 				}

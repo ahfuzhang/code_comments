@@ -1,0 +1,39 @@
+diff --git a/metrics.go b/metrics.go
+index fc121f8..ff22c78 100644
+--- a/metrics.go
++++ b/metrics.go
+@@ -23,7 +23,9 @@ import (
+ )
+ 
+ type namedMetric struct {
+-	name   string
++	// name 是 prometheus 中 meric 的名字，例如 foo{bar="baz"}
++	name string
++	// 是一个 counter 或者类似对象
+ 	metric metric
+ 	isAux  bool
+ }
+@@ -33,6 +35,7 @@ type metric interface {
+ 	metricType() string
+ }
+ 
++// 全局默认的 metrics set
+ var defaultSet = NewSet()
+ 
+ func init() {
+@@ -40,6 +43,7 @@ func init() {
+ }
+ 
+ var (
++	// 全集的集合。只有存在这个 map，才能找到所有存在的 metrics
+ 	registeredSets     = make(map[*Set]struct{})
+ 	registeredSetsLock sync.Mutex
+ )
+@@ -47,6 +51,7 @@ var (
+ // RegisterSet registers the given set s for metrics export via global WritePrometheus() call.
+ //
+ // See also UnregisterSet.
++// 注册一个集合。 init() 函数中会注册默认的 set
+ func RegisterSet(s *Set) {
+ 	registeredSetsLock.Lock()
+ 	registeredSets[s] = struct{}{}

@@ -1,0 +1,15 @@
+diff --git a/src/Grpc.Core.Api/KeyCertificatePair.cs b/src/Grpc.Core.Api/KeyCertificatePair.cs
+index 1c0d2851..686fc7f7 100644
+--- a/src/Grpc.Core.Api/KeyCertificatePair.cs
++++ b/src/Grpc.Core.Api/KeyCertificatePair.cs
+@@ -16,10 +16,6 @@
+ 
+ #endregion
+ 
+-using System;
+-using System.Collections.Generic;
+-
+-using Grpc.Core.Internal;
+ using Grpc.Core.Utils;
+ 
+ namespace Grpc.Core;

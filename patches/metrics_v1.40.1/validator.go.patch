@@ -1,0 +1,35 @@
+diff --git a/validator.go b/validator.go
+index 8dd4d79..f53bd30 100644
+--- a/validator.go
++++ b/validator.go
+@@ -13,6 +13,8 @@ import (
+ //   - foo
+ //   - foo{bar="baz"}
+ //   - foo{bar="baz",aaa="b"}
++//
++// 对 metrics 的名字进行校验，确保符合 Prometheus 的规范
+ func ValidateMetric(s string) error {
+ 	if len(s) == 0 {
+ 		return fmt.Errorf("metric cannot be empty")
+@@ -24,6 +26,7 @@ func ValidateMetric(s string) error {
+ 	if n < 0 {
+ 		return validateIdent(s)
+ 	}
++	// ident 是 metrics 的 __name__
+ 	ident := s[:n]
+ 	s = s[n+1:]
+ 	if err := validateIdent(ident); err != nil {
+@@ -35,6 +38,7 @@ func ValidateMetric(s string) error {
+ 	return validateTags(s[:len(s)-1])
+ }
+ 
++// 校验 metrics 的 name
+ func validateTags(s string) error {
+ 	if len(s) == 0 {
+ 		return nil
+@@ -91,4 +95,5 @@ func validateIdent(s string) error {
+ 	return nil
+ }
+ 
++// 一个合法的 metrics name 的正则表达式
+ var identRegexp = regexp.MustCompile("^[a-zA-Z_:.][a-zA-Z0-9_:.]*$")

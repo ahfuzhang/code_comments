@@ -1,0 +1,20 @@
+diff --git a/counter.go b/counter.go
+index 1076e80..43645c9 100644
+--- a/counter.go
++++ b/counter.go
+@@ -24,6 +24,7 @@ func NewCounter(name string) *Counter {
+ //
+ // It may be used as a gauge if Dec and Set are called.
+ type Counter struct {
++	// todo: 这里按照 cache line 对齐是不是更好?
+ 	n uint64
+ }
+ 
+@@ -60,6 +61,7 @@ func (c *Counter) Set(n uint64) {
+ // marshalTo marshals c with the given prefix to w.
+ func (c *Counter) marshalTo(prefix string, w io.Writer) {
+ 	v := c.Get()
++	// todo: 这个位置明显有更高性能的写入方法
+ 	fmt.Fprintf(w, "%s %d\n", prefix, v)
+ }
+ 

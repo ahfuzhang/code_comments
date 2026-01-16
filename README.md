@@ -56,3 +56,29 @@ make clone prj=golang name=go ver=go1.25.5
 make diff name=go ver=go1.25.5
 ```
 
+## https://github.com/open-telemetry/opentelemetry-dotnet
+
+DotNet 上的可观测性的库。
+
+```bash
+make clone prj=open-telemetry name=opentelemetry-dotnet ver=core-1.14.0
+make diff name=opentelemetry-dotnet ver=core-1.14.0
+```
+
+## https://github.com/VictoriaMetrics/metrics
+
+简洁且高性能的 metrics 上报库。
+
+```bash
+make clone prj=VictoriaMetrics name=metrics ver=v1.40.1
+make diff name=metrics ver=v1.40.1
+```
+
+## https://github.com/microsoft/FASTER
+
+超高性能的 kv cache 组件。据说能达到单核上千万。
+
+```bash
+make clone prj=microsoft name=FASTER ver=v2.6.5
+make diff name=FASTER ver=v2.6.5
+```

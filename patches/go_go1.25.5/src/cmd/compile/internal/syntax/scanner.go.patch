@@ -1,0 +1,12 @@
+diff --git a/src/cmd/compile/internal/syntax/scanner.go b/src/cmd/compile/internal/syntax/scanner.go
+index 807d838386..58fba2874e 100644
+--- a/src/cmd/compile/internal/syntax/scanner.go
++++ b/src/cmd/compile/internal/syntax/scanner.go
+@@ -421,6 +421,7 @@ func hash(s []byte) uint {
+ 	return (uint(s[0])<<4 ^ uint(s[1]) + uint(len(s))) & uint(len(keywordMap)-1)
+ }
+ 
++// 64 个元素
+ var keywordMap [1 << 6]token // size must be power of two
+ 
+ func init() {
