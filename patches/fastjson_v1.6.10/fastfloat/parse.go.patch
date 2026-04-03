@@ -1,0 +1,14 @@
+diff --git a/fastfloat/parse.go b/fastfloat/parse.go
+index b37838d..d595c2b 100644
+--- a/fastfloat/parse.go
++++ b/fastfloat/parse.go
+@@ -59,7 +59,9 @@ func ParseUint64(s string) (uint64, error) {
+ 	i := uint(0)
+ 	d := uint64(0)
+ 	j := i
++	// todo: 使用 jump table，去掉循环
+ 	for i < uint(len(s)) {
++		// todo: 使用 simd，检查多个字符是否为 '0'-'9'
+ 		if s[i] >= '0' && s[i] <= '9' {
+ 			d = d*10 + uint64(s[i]-'0')
+ 			i++

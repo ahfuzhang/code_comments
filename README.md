@@ -82,3 +82,29 @@ make diff name=metrics ver=v1.40.1
 make clone prj=microsoft name=FASTER ver=v2.6.5
 make diff name=FASTER ver=v2.6.5
 ```
+
+## https://github.com/Samsung/netcoredbg
+
+DotNet 程序的调试器。
+
+```bash
+make clone prj=Samsung name=netcoredbg ver=3.1.3-1062
+make diff name=netcoredbg ver=3.1.3-1062
+```
+
+## https://github.com/lemire/constmap
+
+高性能只读 Map
+
+```bash
+make clone prj=lemire name=constmap ver=v1.0.0
+make diff name=constmap ver=v1.0.0
+```
+
+## https://github.com/valyala/fastjson
+
+```bash
+make clone prj=valyala name=fastjson ver=v1.6.10
+make diff name=fastjson ver=v1.6.10
+```
+
